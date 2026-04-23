@@ -1,0 +1,387 @@
+/**
+ * Executor de Fluxos de Agentes
+ * Orquestra a execução, persiste progresso e emite eventos
+ */
+
+import { Pool } from 'pg';
+import { buildGraph, AgentGraph, validateGraph, type AgentGraphDefinition, type NodeResult } from './graph-builder';
+import { createInitialState, type AgentState } from './state';
+import { validateGraphNodes, getRegisteredNodeTypes } from './node-registry';
+import { createGraphTrace, createNodeSpan, finalizeNodeSpan, finalizeTrace, generateTraceId } from './langfuse-tracer';
+import { getClientForUser } from '../pg-pool';
+import { broadcastJobEvent } from '../websocket/job-broadcaster';
+
+export interface ExecutionOptions {
+  jobId: string;
+  tenantId: string;
+  clientId: string;
+  userId: string;
+  payload: any;
+  graphId?: string;
+  pool: Pool;
+  onNodeStart?: (nodeId: string) => void;
+  onNodeComplete?: (nodeId: string, result: NodeResult) => void;
+}
+
+export interface ExecutionRecord {
+  id: string;
+  status: 'running' | 'completed' | 'failed' | 'canceled';
+  currentNodeId: string | null;
+  nodeResults: Record<string, any>;
+}
+
+/**
+ * Carrega a definição do fluxo do banco de dados
+ */
+export async function loadGraphDefinition(
+  pool: Pool,
+  graphId: string,
+  tenantId: string
+): Promise<AgentGraphDefinition | null> {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(
+      `SELECT id, tenant_id, name, nodes, edges FROM agent_graphs WHERE id = $1 AND tenant_id = $2 AND is_active = true`,
+      [graphId, tenantId]
+    );
+
+    if (!rows[0]) return null;
+
+    return {
+      id: rows[0].id,
+      tenantId: rows[0].tenant_id,
+      name: rows[0].name,
+      nodes: rows[0].nodes || [],
+      edges: rows[0].edges || [],
+    };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Carrega o fluxo padrão do tenant (is_default = true)
+ */
+export async function loadDefaultGraph(
+  pool: Pool,
+  tenantId: string
+): Promise<AgentGraphDefinition | null> {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(
+      `SELECT id, tenant_id, name, nodes, edges FROM agent_graphs WHERE tenant_id = $1 AND is_default = true AND is_active = true LIMIT 1`,
+      [tenantId]
+    );
+
+    if (!rows[0]) return null;
+
+    return {
+      id: rows[0].id,
+      tenantId: rows[0].tenant_id,
+      name: rows[0].name,
+      nodes: rows[0].nodes || [],
+      edges: rows[0].edges || [],
+    };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Cria um registro de execução no banco
+ */
+export async function createExecution(
+  pool: Pool,
+  params: {
+    tenantId: string;
+    graphId: string;
+    jobId: string;
+    traceId?: string;
+  }
+): Promise<string> {
+  const { tenantId, graphId, jobId, traceId } = params;
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(
+      `INSERT INTO agent_executions (tenant_id, graph_id, job_id, trace_id, status, node_results)
+       VALUES ($1, $2, $3, $4, 'running', '{}') RETURNING id`,
+      [tenantId, graphId, jobId, traceId || null]
+    );
+    return rows[0].id;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Atualiza o progresso da execução
+ */
+export async function updateExecutionProgress(
+  pool: Pool,
+  executionId: string,
+  updates: {
+    status?: 'running' | 'completed' | 'failed' | 'canceled';
+    currentNodeId?: string | null;
+    nodeResults?: Record<string, any>;
+    completedAt?: Date;
+  }
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    const fields: string[] = [];
+    const values: any[] = [];
+    let i = 1;
+
+    if (updates.status !== undefined) {
+      fields.push(`status=$${i++}`);
+      values.push(updates.status);
+    }
+    if (updates.currentNodeId !== undefined) {
+      fields.push(`current_node_id=$${i++}`);
+      values.push(updates.currentNodeId);
+    }
+    if (updates.nodeResults !== undefined) {
+      fields.push(`node_results=$${i++}`);
+      values.push(JSON.stringify(updates.nodeResults));
+    }
+    if (updates.completedAt !== undefined) {
+      fields.push(`completed_at=$${i++}`);
+      values.push(updates.completedAt);
+    }
+
+    if (fields.length === 0) return;
+    values.push(executionId);
+
+    await client.query(
+      `UPDATE agent_executions SET ${fields.join(', ')} WHERE id=$${i}`,
+      values
+    );
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Executa o fluxo completo
+ */
+export async function executeGraph(options: ExecutionOptions): Promise<{
+  success: boolean;
+  state: AgentState;
+  executionId: string;
+  postId?: string;
+}> {
+  const { jobId, tenantId, clientId, userId, payload, graphId, pool, onNodeStart, onNodeComplete } = options;
+
+  // 1. Carrega informações do cliente
+  const pgClient = await getClientForUser(userId);
+  let clientInfo = { name: 'Cliente', niche: '', description: '' };
+  try {
+    const { rows } = await pgClient.query(
+      `SELECT name, niche, description FROM clients WHERE id = $1 AND tenant_id = $2`,
+      [clientId, tenantId]
+    );
+    if (rows[0]) {
+      clientInfo = {
+        name: rows[0].name,
+        niche: rows[0].niche || '',
+        description: rows[0].description || '',
+      };
+    }
+  } finally {
+    pgClient.release();
+  }
+
+  // 2. Carrega o fluxo
+  let graphDef: AgentGraphDefinition | null = null;
+  if (graphId) {
+    graphDef = await loadGraphDefinition(pool, graphId, tenantId);
+  }
+  if (!graphDef) {
+    graphDef = await loadDefaultGraph(pool, tenantId);
+  }
+
+  // Se não houver fluxo configurado, retorna erro
+  if (!graphDef) {
+    throw new Error('No agent graph configured for this tenant');
+  }
+
+  // 3. Cria estado inicial e registro de execução (ANTES da validação para ter executionId)
+  const initialState = createInitialState({ jobId, tenantId, clientId, userId, payload, clientInfo });
+  const executionId = await createExecution(pool, { tenantId, graphId: graphDef.id, jobId });
+
+  // 2.5 Validação pré-execução: todos os nós têm handlers registrados?
+  const nodeTypes = graphDef.nodes.map((n) => n.type);
+  const validationErrors = validateGraphNodes(nodeTypes);
+  if (validationErrors.length > 0) {
+    const errorMessage = `Graph validation failed: ${validationErrors.join('; ')}`;
+    console.error('[executor]', errorMessage);
+
+    // Registra no Langfuse como trace falho
+    try {
+      const trace = createGraphTrace({
+        tenantId,
+        clientId,
+        userId,
+        jobId,
+        graphId: graphDef.id,
+        graphName: graphDef.name,
+      });
+      trace.update({
+        metadata: { status: 'failed', error: errorMessage },
+      });
+    } catch (lfErr: any) {
+      console.error('[executor] Langfuse trace error:', lfErr.message);
+    }
+
+    // Atualiza o job com o erro
+    await updateExecutionProgress(pool, executionId, {
+      status: 'failed',
+      currentNodeId: null,
+      nodeResults: { validationError: errorMessage },
+      completedAt: new Date(),
+    });
+
+    throw new Error(errorMessage);
+  }
+
+  // 4. Cria trace no Langfuse para observabilidade
+  let trace: any;
+  let traceId: string | undefined;
+  try {
+    trace = createGraphTrace({
+      tenantId,
+      clientId,
+      userId,
+      jobId,
+      graphId: graphDef.id,
+      graphName: graphDef.name,
+    });
+    traceId = trace.id;
+  } catch (lfErr: any) {
+    console.error('[executor] Failed to create Langfuse trace:', lfErr.message);
+  }
+
+  // 5. Emite evento de início de job
+  broadcastJobEvent(userId, {
+    type: 'job:stage',
+    jobId,
+    stage: 'executing_graph',
+    progress: 10,
+    tenantId,
+  });
+
+  // 6. Executa o fluxo
+  const graph = buildGraph(graphDef);
+  const nodeResultsMap: Record<string, any> = {};
+
+  const result = await graph.execute(initialState, {
+    onNodeStart: (nodeId) => {
+      const nodeDef = graphDef!.nodes.find((n) => n.id === nodeId);
+      broadcastJobEvent(userId, {
+        type: 'agent:start',
+        jobId,
+        nodeId,
+        agentName: nodeDef?.type || nodeId,
+        tenantId,
+      });
+      updateExecutionProgress(pool, executionId, { currentNodeId: nodeId }).catch(console.error);
+      onNodeStart?.(nodeId);
+    },
+    onNodeComplete: (nodeId, nodeResult) => {
+      const nodeDef = graphDef!.nodes.find((n) => n.id === nodeId);
+      const summary = nodeResult.status === 'completed'
+        ? `Completed in ${nodeResult.latency}ms`
+        : `Failed: ${nodeResult.error || 'Unknown error'}`;
+
+      broadcastJobEvent(userId, {
+        type: nodeResult.status === 'completed' ? 'agent:complete' : 'agent:error',
+        jobId,
+        nodeId,
+        summary: nodeResult.status === 'completed' ? summary : nodeResult.error || 'Error',
+        error: nodeResult.error || '',
+        tenantId,
+      });
+
+      nodeResultsMap[nodeId] = {
+        status: nodeResult.status,
+        latency: nodeResult.latency,
+        timestamp: nodeResult.timestamp,
+        error: nodeResult.error,
+      };
+      updateExecutionProgress(pool, executionId, {
+        currentNodeId: null,
+        nodeResults: nodeResultsMap,
+      }).catch(console.error);
+      onNodeComplete?.(nodeId, nodeResult);
+    },
+  });
+
+  // 7. Finaliza execução e emite evento final
+  const finalStatus = result.status === 'completed' ? 'completed' : 'failed';
+
+  if (finalStatus === 'completed') {
+    broadcastJobEvent(userId, {
+      type: 'job:stage',
+      jobId,
+      stage: 'completed',
+      progress: 100,
+      tenantId,
+    });
+  } else {
+    const lastError = result.finalState.errors[result.finalState.errors.length - 1];
+    broadcastJobEvent(userId, {
+      type: 'job:failed',
+      jobId,
+      error: lastError?.message || 'Graph execution failed',
+      tenantId,
+    });
+  }
+
+  await updateExecutionProgress(pool, executionId, {
+    status: finalStatus,
+    currentNodeId: null,
+    nodeResults: nodeResultsMap,
+    completedAt: new Date(),
+  });
+
+  // 8. Salva o post gerado
+  let postId: string | undefined;
+  if (result.finalState.draft.title && result.finalState.draft.content) {
+    const saveClient = await getClientForUser(userId);
+    try {
+      const { rows } = await saveClient.query(
+        `INSERT INTO posts (tenant_id, client_id, user_id, title, content, channels, status, generated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7) RETURNING id`,
+        [
+          tenantId,
+          clientId,
+          userId,
+          result.finalState.draft.title,
+          result.finalState.draft.content,
+          JSON.stringify(result.finalState.channels),
+          `agent-graph:${graphDef.id}`,
+        ]
+      );
+      postId = rows[0].id;
+    } finally {
+      saveClient.release();
+    }
+  }
+
+  // 9. Emite job:complete com postId se houver
+  if (postId) {
+    broadcastJobEvent(userId, {
+      type: 'job:complete',
+      jobId,
+      postId,
+      tenantId,
+    });
+  }
+
+  return {
+    success: result.status === 'completed',
+    state: result.finalState,
+    executionId,
+    postId,
+  };
+}

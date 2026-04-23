@@ -49,7 +49,9 @@ export default function Sources() {
 
     createSource.mutate({
       clientId: selectedClient,
-      data,
+      name: data.name,
+      url: data.url,
+      type: data.type,
     });
 
     form.reset();
@@ -58,7 +60,7 @@ export default function Sources() {
 
   const handleDeleteSource = (sourceId: string) => {
     if (!selectedClient) return;
-    deleteSource.mutate({ id: sourceId, clientId: selectedClient });
+    deleteSource.mutate(sourceId);
   };
 
   const getSourceIcon = (type: string) => {

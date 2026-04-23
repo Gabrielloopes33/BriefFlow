@@ -4,6 +4,7 @@ Interface de banco de dados para o scraper
 
 import sqlite3
 import json
+import hashlib
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pathlib import Path
@@ -84,6 +85,7 @@ class Database:
                     title TEXT NOT NULL,
                     url TEXT NOT NULL,
                     content_text TEXT,
+                    content_hash TEXT,
                     summary TEXT,
                     topics TEXT, -- JSON
                     published_at INTEGER,
@@ -123,6 +125,19 @@ class Database:
                     created_at INTEGER,
                     FOREIGN KEY (client_id) REFERENCES clients (id) ON DELETE CASCADE
                 )
+            """)
+            
+            # Migração: adicionar content_hash se não existir (tabelas antigas)
+            try:
+                conn.execute("ALTER TABLE contents ADD COLUMN content_hash TEXT")
+                logger.info("✅ Coluna content_hash adicionada")
+            except sqlite3.OperationalError:
+                pass  # Coluna já existe
+            
+            # Migração: adicionar índice de hash
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_contents_hash 
+                ON contents (client_id, content_hash)
             """)
             
             conn.commit()
@@ -192,23 +207,41 @@ class Database:
             
             return sources
     
-    def save_content(self, content: ScrapedContent, source_id: str, client_id: str) -> str:
-        """Salvar conteúdo no banco de dados"""
-        content_id = f"content_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hash(content.url)}"
+    def _compute_content_hash(self, text: str) -> str:
+        """Computa hash SHA-256 do conteúdo para deduplicação"""
+        if not text:
+            return ""
+        # Normaliza: remove espaços extras e converte para lowercase
+        normalized = " ".join(text.lower().split())
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+
+    def save_content(self, content: ScrapedContent, source_id: str, client_id: str) -> Optional[str]:
+        """Salvar conteúdo no banco de dados com deduplicação por hash"""
+        content_id = f"content_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hash(content.url) % 10000}"
+        content_hash = self._compute_content_hash(content.content_text)
         
         with self.get_connection() as conn:
-            # Verificar se o conteúdo já existe
+            # Verificar deduplicação por hash por cliente
+            cursor = conn.execute(
+                "SELECT id FROM contents WHERE client_id = ? AND content_hash = ?",
+                (client_id, content_hash)
+            )
+            if cursor.fetchone():
+                logger.info(f"📄 Conteúdo duplicado (hash) para cliente {client_id}: {content.url}")
+                return None
+            
+            # Verificar se URL já existe
             cursor = conn.execute("SELECT id FROM contents WHERE url = ?", (content.url,))
             if cursor.fetchone():
-                logger.info(f"📄 Conteúdo já existe: {content.url}")
+                logger.info(f"📄 Conteúdo já existe (URL): {content.url}")
                 return None
             
             # Inserir novo conteúdo
             conn.execute("""
                 INSERT INTO contents (
-                    id, source_id, client_id, title, url, content_text, 
+                    id, source_id, client_id, title, url, content_text, content_hash,
                     summary, topics, published_at, scraped_at, is_analyzed
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 content_id,
                 source_id,
@@ -216,6 +249,7 @@ class Database:
                 content.title,
                 content.url,
                 content.content_text,
+                content_hash,
                 content.summary,
                 json.dumps(content.tags) if content.tags else None,
                 int(content.published_at.timestamp() * 1000) if content.published_at else None,

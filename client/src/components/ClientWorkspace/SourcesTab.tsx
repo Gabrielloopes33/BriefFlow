@@ -37,10 +37,12 @@ export function SourcesTab({ clientId }: SourcesTabProps) {
     resolver: zodResolver(sourceSchema),
   });
 
-  const onSubmit = (data: SourceFormData) => {
+  const onSubmit = (formData: SourceFormData) => {
     createSource.mutate({
       clientId,
-      data,
+      name: formData.name,
+      url: formData.url,
+      type: formData.type,
     }, {
       onSuccess: () => {
         form.reset();
@@ -50,7 +52,7 @@ export function SourcesTab({ clientId }: SourcesTabProps) {
   };
 
   const handleDeleteSource = (sourceId: string) => {
-    deleteSource.mutate({ id: sourceId, clientId });
+    deleteSource.mutate(sourceId);
   };
 
   const getSourceIcon = (type: string) => {

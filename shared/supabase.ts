@@ -14,9 +14,10 @@ const supabaseAnonKey = isBrowser
   ? import.meta.env.VITE_SUPABASE_ANON_KEY
   : (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY);
 
-const supabaseServiceKey = isBrowser
-  ? import.meta.env.VITE_SUPABASE_SERVICE_KEY
-  : (process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_SERVICE_KEY);
+// Service role key must never be read from browser-exposed env vars.
+const supabaseServiceKey = !isBrowser
+  ? process.env.SUPABASE_SERVICE_KEY
+  : undefined;
 
 // Validação das variáveis
 if (!supabaseUrl) {

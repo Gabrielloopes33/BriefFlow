@@ -1,0 +1,360 @@
+openapi: 3.0.3
+info:
+  title: BriefFlow Posts Async API
+  version: 1.0.0
+  description: Contrato da criacao assincrona de posts por tenant.
+servers:
+  - url: http://localhost:5000
+    description: Desenvolvimento
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    CreatePostRequest:
+      type: object
+      required:
+        - goal
+        - language
+        - channels
+        - idempotency_key
+      properties:
+        title_hint:
+          type: string
+          maxLength: 180
+        goal:
+          type: string
+          enum: [lead_generation, authority, engagement, conversion]
+        language:
+          type: string
+          example: pt-BR
+        tone:
+          type: string
+          example: consultivo
+        channels:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [instagram, linkedin, blog, x, youtube]
+        sources:
+          type: object
+          properties:
+            mode:
+              type: string
+              enum: [client_sources, selected_sources, mixed]
+            source_ids:
+              type: array
+              items:
+                type: string
+                format: uuid
+            extra_urls:
+              type: array
+              items:
+                type: string
+                format: uri
+        generation:
+          type: object
+          properties:
+            max_words:
+              type: integer
+              minimum: 80
+              maximum: 3000
+            include_cta:
+              type: boolean
+            brand_rules:
+              type: array
+              items:
+                type: string
+        idempotency_key:
+          type: string
+          minLength: 8
+          maxLength: 120
+
+    CreatePostAcceptedResponse:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued]
+        estimated_seconds:
+          type: integer
+
+    JobStatusResponse:
+      type: object
+      required: [job_id, client_id, status, stage, progress]
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        client_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, processing, retrying, completed, failed, canceled]
+        stage:
+          type: string
+          enum: [validating_input, fetching_sources, crawling_content, extracting_insights, drafting_post, finalizing]
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        attempt:
+          type: integer
+          minimum: 1
+        max_attempts:
+          type: integer
+          minimum: 1
+        error:
+          type: object
+          nullable: true
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            retryable:
+              type: boolean
+        result:
+          type: object
+          properties:
+            post_id:
+              type: string
+              format: uuid
+              nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Post:
+      type: object
+      required: [id, client_id, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        client_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        content:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [draft, ready_review, approved, rejected, published]
+        generated_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [message, code]
+      properties:
+        message:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+paths:
+  /api/clients/{clientId}/posts:
+    post:
+      tags: [Posts]
+      summary: Criar post de forma assincrona
+      parameters:
+        - in: path
+          name: clientId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePostRequest'
+      responses:
+        '202':
+          description: Job aceito para processamento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatePostAcceptedResponse'
+        '400':
+          description: Payload invalido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Nao autenticado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Client sem ownership do usuario
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Requisicao duplicada por idempotency_key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/jobs/{jobId}:
+    get:
+      tags: [Jobs]
+      summary: Consultar status do job
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Status atual do job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatusResponse'
+        '401':
+          description: Nao autenticado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Job nao pertence ao tenant do usuario
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Job nao encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/clients/{clientId}/posts/list:
+    get:
+      tags: [Posts]
+      summary: Listar posts por cliente
+      parameters:
+        - in: path
+          name: clientId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Lista de posts do cliente
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Post'
+
+  /api/posts/{postId}:
+    get:
+      tags: [Posts]
+      summary: Obter detalhe de post
+      parameters:
+        - in: path
+          name: postId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Detalhe do post
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+    put:
+      tags: [Posts]
+      summary: Atualizar post
+      parameters:
+        - in: path
+          name: postId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+                status:
+                  type: string
+                  enum: [draft, ready_review, approved, rejected, published]
+      responses:
+        '200':
+          description: Post atualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+
+x-flow-example:
+  name: create-post-async
+  steps:
+    - client calls POST /api/clients/{clientId}/posts
+    - api validates payload, ownership, idempotency
+    - api stores job with status queued and returns 202
+    - worker executes stages and updates job status
+    - client polls GET /api/jobs/{jobId} until completed
+    - client reads post detail via GET /api/posts/{postId}
+
+x-error-codes:
+  BF_VALIDATION_ERROR: payload invalido
+  BF_UNAUTHORIZED: token invalido ou ausente
+  BF_FORBIDDEN_TENANT: ownership invalida
+  BF_DUPLICATE_REQUEST: idempotency key repetida
+  BF_JOB_NOT_FOUND: job inexistente
+  BF_PROVIDER_TIMEOUT: timeout em provider de crawling/IA
+  BF_PROVIDER_UNAVAILABLE: indisponibilidade externa

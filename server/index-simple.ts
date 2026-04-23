@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import express from "express";
+import express, { type Request, type Response, type NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -22,15 +22,15 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
   const path = req.path;
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
   const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
+  res.json = function (bodyJson: any, ...args: any[]) {
     capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
+    return (originalResJson as any).apply(res, [bodyJson, ...args]);
   };
 
   res.on("finish", () => {
@@ -52,11 +52,11 @@ app.use((req, res, next) => {
   // Register routes without auth for now
   try {
     await registerRoutes(httpServer, app);
-  } catch (error) {
+  } catch (error: any) {
     console.log("Auth setup skipped (development):", error.message);
   }
 
-  app.use((err: any, _req, res, next) => {
+  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
@@ -74,12 +74,12 @@ app.use((req, res, next) => {
   // this serves both API and client.
   // It is only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
+  const listenOptions = process.platform === "win32"
+    ? { port, host: "0.0.0.0" }
+    : { port, host: "0.0.0.0", reusePort: true };
+
   httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
+    listenOptions,
     () => {
       log(`serving on port ${port}`);
       console.log(`\n🚀 Content-Generator está rodando!`);

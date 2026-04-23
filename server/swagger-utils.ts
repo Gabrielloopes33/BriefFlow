@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { OpenAPIV3 } from 'openapi-types';
 
 // Definindo tipos localmente para evitar problemas de importação
 type SchemaObject = any;

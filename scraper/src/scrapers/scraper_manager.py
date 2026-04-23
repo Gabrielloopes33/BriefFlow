@@ -19,6 +19,7 @@ from models.scraper import Source, ScrapedContent, SourceType, ScrapingTask, Con
 from models.database import Database
 from .rss_scraper import RSScraper
 from .web_scraper import WebScraper
+from .playwright_scraper import PlaywrightScraper, PLAYWRIGHT_AVAILABLE
 from utils.config import Config
 from utils.logger import setup_logger
 
@@ -35,6 +36,7 @@ class ScraperManager:
         # Inicializar scrapers
         self.rss_scraper = RSScraper()
         self.web_scraper = WebScraper()
+        self.playwright_scraper = PlaywrightScraper() if PLAYWRIGHT_AVAILABLE else None
         
         # Armazenamento de tarefas em execução
         self.running_tasks: Dict[str, ScrapingTask] = {}
@@ -264,12 +266,13 @@ class ScraperManager:
         """Obter todas as tarefas"""
         return list(self.running_tasks.values())
     
-    def scrape_single_url(self, url: str) -> Optional[ScrapedContent]:
+    def scrape_single_url(self, url: str, use_playwright: bool = False) -> Optional[ScrapedContent]:
         """
         Fazer scraping de uma URL específica
         
         Args:
             url: URL para scraping
+            use_playwright: Força uso do Playwright para sites dinâmicos
             
         Returns:
             Conteúdo coletado ou None
@@ -283,12 +286,22 @@ class ScraperManager:
                 contents = self.rss_scraper.scrape(url, max_items=1)
                 return contents[0] if contents else None
             
-            else:
-                # Fazer scraping de página web
-                with ThreadPoolExecutor() as executor:
-                    future = executor.submit(self.web_scraper.scrape_single_article, url)
-                    content = asyncio.run(asyncio.wrap_future(future))
-                return content
+            # Se forçado ou se o site parece dinâmico, usar Playwright
+            if use_playwright and self.playwright_scraper:
+                logger.info(f"🎭 Usando Playwright para {url}")
+                return self.playwright_scraper.scrape_url(url)
+            
+            # Tentar com WebScraper (requests + BeautifulSoup)
+            result = self.web_scraper.scrape_single_article(url)
+            if result:
+                return result
+            
+            # Fallback para Playwright se web scraper falhar ou retornar conteúdo vazio
+            if self.playwright_scraper:
+                logger.info(f"🔄 Fallback para Playwright: {url}")
+                return self.playwright_scraper.scrape_url(url)
+                
+            return None
                 
         except Exception as e:
             logger.error(f"❌ Erro ao fazer scraping da URL {url}: {e}")
@@ -306,6 +319,28 @@ class ScraperManager:
         """
         rss_indicators = ['/rss', '/feed', '/atom.xml', '.rss', '.xml']
         return any(indicator in url.lower() for indicator in rss_indicators)
+    
+    def scrape_batch(self, urls: List[str], use_playwright: bool = False) -> List[ScrapedContent]:
+        """
+        Fazer scraping em lote de múltiplas URLs
+        
+        Args:
+            urls: Lista de URLs para scraping
+            use_playwright: Força uso do Playwright
+            
+        Returns:
+            Lista de conteúdos coletados
+        """
+        logger.info(f"📦 Batch scraping de {len(urls)} URLs")
+        results = []
+        
+        for url in urls:
+            content = self.scrape_single_url(url, use_playwright=use_playwright)
+            if content:
+                results.append(content)
+        
+        logger.info(f"✅ Batch concluído: {len(results)}/{len(urls)} URLs com sucesso")
+        return results
     
     def test_source(self, source_url: str, source_type: SourceType) -> Dict[str, Any]:
         """

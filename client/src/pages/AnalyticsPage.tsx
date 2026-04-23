@@ -83,8 +83,9 @@ export function AnalyticsPage() {
 
   // Parse metrics for charts
   const parseMetricValue = (metricName: string) => {
-    if (!metaOrganicData?.metrics) return [];
-    const metric = metaOrganicData.metrics.find((m: any) => m.name === metricName);
+    const data = metaOrganicData as any;
+    if (!data?.metrics) return [];
+    const metric = data.metrics.find((m: any) => m.name === metricName);
     if (!metric) return [];
     return metric.values.map((v: any, i: number) => ({
       name: `Dia ${i + 1}`,
@@ -474,7 +475,7 @@ export function AnalyticsPage() {
                     </CardHeader>
                     <CardContent>
                       <div className="text-2xl font-bold">
-                        {metaAdsData?.campaigns?.reduce((acc: number, c: any) => 
+                        {(metaAdsData as any)?.campaigns?.reduce((acc: number, c: any) => 
                           acc + parseFloat(c.insights?.data?.[0]?.spend || "0"), 0
                         ).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) || "R$ 0,00"}
                       </div>
@@ -533,7 +534,7 @@ export function AnalyticsPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {metaAdsData?.campaigns?.map((campaign: any) => (
+                          {(metaAdsData as any)?.campaigns?.map((campaign: any) => (
                             <tr key={campaign.id} className="border-b border-border/50 last:border-0">
                               <td className="py-3 px-4">{campaign.name}</td>
                               <td className="py-3 px-4">

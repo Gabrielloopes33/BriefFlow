@@ -1,14 +1,16 @@
 
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, MessageSquare, Plus, Settings, BarChart2, Users } from "lucide-react";
+import { LayoutDashboard, WandSparkles, Plus, Settings, BarChart2, Users, Bot, LibraryBig } from "lucide-react";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
     const [location] = useLocation();
 
     const NAV_ITEMS = [
         { icon: LayoutDashboard, label: "Overview", path: "/dashboard" },
-        { icon: MessageSquare, label: "Chat", path: "/chat" },
+        { icon: WandSparkles, label: "Studio", path: "/studio" },
         { icon: Users, label: "Clientes", path: "/clients" },
+        { icon: LibraryBig, label: "Biblioteca", path: "/library" },
+        { icon: Bot, label: "Agentes", path: "/agents" },
         { icon: BarChart2, label: "Analytics", path: "/analytics" },
         { icon: Settings, label: "Settings", path: "/settings" },
     ];
@@ -35,14 +37,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         const Icon = item.icon;
 
                         return (
-                            <Link key={item.path} href={item.path}>
-                                <a className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all ${isActive
-                                        ? "bg-secondary text-white shadow-sm ring-1 ring-border"
-                                        : "text-muted-foreground hover:bg-secondary/50 hover:text-white"
-                                    }`}>
-                                    <Icon size={18} className={isActive ? "text-primary" : ""} />
-                                    <span className="hidden md:block">{item.label}</span>
-                                </a>
+                            <Link
+                                key={item.path}
+                                href={item.path}
+                                className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all ${isActive
+                                    ? "bg-secondary text-white shadow-sm ring-1 ring-border"
+                                    : "text-muted-foreground hover:bg-secondary/50 hover:text-white"
+                                }`}
+                            >
+                                <Icon size={18} className={isActive ? "text-primary" : ""} />
+                                <span className="hidden md:block">{item.label}</span>
                             </Link>
                         );
                     })}

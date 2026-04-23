@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import express from "express";
+import express, { type Request, type Response, type NextFunction } from "express";
 import { createServer } from "http";
 import { swaggerUi, swaggerSpec } from "./swagger-simple";
 
@@ -29,13 +29,13 @@ app.get("/api-docs", swaggerUi.setup(swaggerSpec, {
 }));
 
 // JSON endpoint para a especificação OpenAPI
-app.get("/api-docs.json", (req, res) => {
+app.get("/api-docs.json", (req: Request, res: Response) => {
   res.setHeader("Content-Type", "application/json");
   res.send(swaggerSpec);
 });
 
 // Simple health check
-app.get("/", (req, res) => {
+app.get("/", (req: Request, res: Response) => {
   res.json({
     message: "Content-Generator API is running!",
     status: "healthy",
@@ -44,7 +44,7 @@ app.get("/", (req, res) => {
 });
 
 // API status
-app.get("/api/health", (req, res) => {
+app.get("/api/health", (req: Request, res: Response) => {
   res.json({
     service: "Content-Generator API",
     status: "healthy",
@@ -53,7 +53,7 @@ app.get("/api/health", (req, res) => {
 });
 
 // Simple mock data
-app.get("/api/clients", (req, res) => {
+app.get("/api/clients", (req: Request, res: Response) => {
   res.json([
     {
       id: "1",
@@ -67,7 +67,7 @@ app.get("/api/clients", (req, res) => {
 });
 
 // Log middleware
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
   const path = req.path;
 
@@ -82,7 +82,7 @@ app.use((req, res, next) => {
 });
 
 // Error handling
-app.use((err: any, _req, res, next) => {
+app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
   const status = err.status || err.statusCode || 500;
   const message = err.message || "Internal Server Error";
 

@@ -190,3 +190,40 @@ class CrawlResponse(BaseModel):
     """Resposta do crawling"""
     pages: List[str] = Field(default_factory=list, description="Lista de URLs visitadas")
     urls: List[str] = Field(default_factory=list, description="Campo alternativo para compatibilidade")
+
+# ==================== MODELOS PARA CRAWL BATCH ====================
+
+class CrawlBatchItem(BaseModel):
+    """Item de URL para crawling em lote"""
+    url: str = Field(..., description="URL para crawling")
+    source_type: Optional[str] = Field("blog", description="Tipo da fonte")
+    source_id: Optional[str] = Field(None, description="ID da fonte no banco")
+
+class CrawlBatchRequest(BaseModel):
+    """Requisição para crawling em lote"""
+    tenant_id: str = Field(..., description="ID do tenant")
+    client_id: str = Field(..., description="ID do cliente")
+    sources: List[CrawlBatchItem] = Field(..., description="Lista de fontes para crawlear")
+    use_playwright: bool = Field(False, description="Força uso do Playwright")
+    max_articles_per_source: int = Field(5, ge=1, le=50, description="Máximo de artigos por fonte")
+
+class CrawlBatchContent(BaseModel):
+    """Conteúdo retornado no batch"""
+    title: str = Field(..., description="Título")
+    url: str = Field(..., description="URL")
+    content_text: Optional[str] = Field(None, description="Texto/Markdown do conteúdo")
+    summary: Optional[str] = Field(None, description="Resumo")
+    author: Optional[str] = Field(None, description="Autor")
+    published_at: Optional[str] = Field(None, description="Data de publicação ISO")
+    tags: List[str] = Field(default_factory=list, description="Tags")
+    source_type: str = Field("blog", description="Tipo da fonte")
+    word_count: Optional[int] = Field(None, description="Número de palavras")
+
+class CrawlBatchResponse(BaseModel):
+    """Resposta do crawling em lote"""
+    tenant_id: str = Field(..., description="ID do tenant")
+    client_id: str = Field(..., description="ID do cliente")
+    contents: List[CrawlBatchContent] = Field(default_factory=list, description="Conteúdos crawleados")
+    total_urls: int = Field(0, description="Total de URLs processadas")
+    successful: int = Field(0, description="URLs com sucesso")
+    failed: int = Field(0, description="URLs que falharam")

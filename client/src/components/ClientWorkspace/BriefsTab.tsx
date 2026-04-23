@@ -177,7 +177,7 @@ export function BriefsTab({ clientId }: BriefsTabProps) {
                   <div className="mb-3">
                     <p className="text-xs font-medium mb-2">Pontos-chave:</p>
                     <ul className="space-y-1">
-                      {brief.keyPoints.slice(0, 3).map((point, index) => (
+                      {brief.keyPoints.slice(0, 3).map((point: any, index: number) => (
                         <li key={index} className="text-xs text-muted-foreground flex items-start gap-2">
                           <span className="text-primary">•</span>
                           <span className="line-clamp-1">{point}</span>

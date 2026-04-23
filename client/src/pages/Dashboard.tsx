@@ -1,99 +1,115 @@
-
-import { MOCK_METRICS } from "@/lib/mockData";
-import { MetricCard } from "@/components/ui/MetricCard";
-import { ChatInterface } from "@/components/chat/ChatInterface";
-import { Instagram, Facebook, Search } from "lucide-react";
+import { useDashboard, useDashboardWebSocketIntegration } from "@/hooks/use-dashboard";
+import { MetricsBadges } from "@/components/dashboard/MetricsBadges";
+import { ClientQuickCard } from "@/components/dashboard/ClientQuickCard";
+import { RecentJobsList } from "@/components/dashboard/RecentJobsList";
 import { AppShell } from "@/components/layout/AppShell";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Plus, Users, Activity } from "lucide-react";
+import { Link } from "wouter";
 
 export function Dashboard() {
+  const { data, isLoading, error } = useDashboard();
+
+  // Integra WebSocket para atualizações em tempo real
+  useDashboardWebSocketIntegration();
+
   return (
     <AppShell>
       <div className="flex flex-col h-full gap-6 max-w-7xl mx-auto">
-
-        {/* Mini Metrics Row */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 shrink-0">
-          <MetricCard
-            title="Alcance Insta"
-            value={MOCK_METRICS.instagram.reach}
-            change={MOCK_METRICS.instagram.growth}
-            trend="up"
-            icon={<Instagram size={16} />}
-          />
-          <MetricCard
-            title="Engajamento FB"
-            value={MOCK_METRICS.facebook.engagement}
-            change={MOCK_METRICS.facebook.growth}
-            trend="down"
-            icon={<Facebook size={16} />}
-          />
-          <MetricCard
-            title="Cliques Google"
-            value={MOCK_METRICS.google.clicks}
-            change="+12%"
-            trend="up"
-            icon={<Search size={16} />}
-          />
-          <MetricCard
-            title="Total de Posts"
-            value="142"
-            change="+5"
-            trend="neutral"
-            icon={<div className="w-4 h-4 bg-primary rounded-sm" />}
-          />
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-display font-semibold">Central de Comando</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Acompanhe seus clientes e atividades em tempo real
+            </p>
+          </div>
+          <Link
+            href="/clients"
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Novo Cliente
+          </Link>
         </div>
 
-        {/* Main Workspace */}
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-6 min-h-0">
+        {/* Metrics */}
+        {isLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Skeleton className="h-20 rounded-xl" />
+            <Skeleton className="h-20 rounded-xl" />
+            <Skeleton className="h-20 rounded-xl" />
+          </div>
+        ) : error ? (
+          <div className="text-red-500 text-sm">Erro ao carregar métricas</div>
+        ) : data ? (
+          <MetricsBadges
+            postsThisMonth={data.metrics.posts_this_month}
+            activeClients={data.metrics.active_clients}
+            jobsInProgress={data.metrics.jobs_in_progress}
+          />
+        ) : null}
 
-          {/* Chat Area (Center) */}
-          <div className="md:col-span-8 h-full flex flex-col min-h-0">
-            <div className="h-full">
-              <ChatInterface />
+        {/* Main Content */}
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0 overflow-hidden">
+          {/* Clients Column */}
+          <div className="flex flex-col gap-4 min-h-0">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-primary" />
+              <h2 className="font-display font-semibold">Seus Clientes</h2>
+            </div>
+            <div className="flex-1 overflow-y-auto pr-1 space-y-2">
+              {isLoading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-16 rounded-xl" />
+                ))
+              ) : error ? (
+                <div className="text-red-500 text-sm">Erro ao carregar clientes</div>
+              ) : data && data.clients.length > 0 ? (
+                data.clients.map((client) => (
+                  <ClientQuickCard
+                    key={client.id}
+                    id={client.id}
+                    name={client.name}
+                    niche={client.niche}
+                    lastPostAt={client.last_post_at}
+                    postCount={client.post_count}
+                  />
+                ))
+              ) : (
+                <div className="text-center py-8 text-muted-foreground text-sm">
+                  Nenhum cliente cadastrado.
+                  <br />
+                  <Link href="/clients" className="text-primary hover:underline">
+                    Cadastre seu primeiro cliente
+                  </Link>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Quick References / Knowledge (Right Side) */}
-          <div className="hidden md:flex md:col-span-4 flex-col gap-4 overflow-y-auto pr-2">
-            <div className="bg-card border border-border p-5 rounded-xl">
-              <h3 className="font-display font-semibold mb-3 flex items-center">
-                <SparklesIcon className="w-4 h-4 mr-2 text-primary" />
-                Ações Rápidas
-              </h3>
-              <div className="space-y-2">
-                <button className="w-full text-left px-3 py-2 rounded-lg bg-secondary/50 hover:bg-secondary hover:text-white text-sm transition-colors border border-transparent hover:border-border">
-                  ✨ Gerar Ideia de Post
-                </button>
-                <button className="w-full text-left px-3 py-2 rounded-lg bg-secondary/50 hover:bg-secondary hover:text-white text-sm transition-colors border border-transparent hover:border-border">
-                  📊 Auditar Concorrente
-                </button>
-                <button className="w-full text-left px-3 py-2 rounded-lg bg-secondary/50 hover:bg-secondary hover:text-white text-sm transition-colors border border-transparent hover:border-border">
-                  📅 Agendar Conteúdo
-                </button>
-              </div>
+          {/* Recent Activity Column */}
+          <div className="flex flex-col gap-4 min-h-0">
+            <div className="flex items-center gap-2">
+              <Activity className="w-4 h-4 text-primary" />
+              <h2 className="font-display font-semibold">Atividade Recente</h2>
             </div>
-
-            <div className="bg-card border border-border p-5 rounded-xl flex-1">
-              <h3 className="font-display font-semibold mb-3">Conhecimentos Recentes</h3>
-              <div className="space-y-3">
-                {[1, 2, 3].map(i => (
-                  <div key={i} className="p-3 rounded-lg border border-border bg-background/50 hover:border-primary/50 transition-colors cursor-pointer group">
-                    <div className="text-xs text-primary mb-1">REFERÊNCIA</div>
-                    <div className="font-medium text-sm group-hover:text-primary transition-colors">Como usar IA para SEO em 2025</div>
-                    <div className="text-xs text-muted-foreground mt-2">Adicionado há 2 dias</div>
-                  </div>
-                ))}
-              </div>
+            <div className="flex-1 overflow-y-auto pr-1">
+              {isLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Skeleton key={i} className="h-14 rounded-lg" />
+                  ))}
+                </div>
+              ) : error ? (
+                <div className="text-red-500 text-sm">Erro ao carregar atividades</div>
+              ) : data ? (
+                <RecentJobsList jobs={data.recent_jobs} />
+              ) : null}
             </div>
           </div>
-
         </div>
       </div>
     </AppShell>
   );
-}
-
-function SparklesIcon({ className }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></svg>
-  )
 }

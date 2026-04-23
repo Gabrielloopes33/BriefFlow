@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, boolean, timestamp, uuid } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { pgTable, text as pgText, serial, integer as pgInteger, boolean as pgBoolean, timestamp as pgTimestamp, uuid as pgUuid, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -10,7 +10,7 @@ export const clients = sqliteTable("clients", {
   description: text("description"),
   niche: text("niche"),
   targetAudience: text("target_audience"),
-  createdAt: integer("created_at", { mode: "timestamp" }).$default(() => Date.now()),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
 export const sources = sqliteTable("sources", {
@@ -21,7 +21,7 @@ export const sources = sqliteTable("sources", {
   type: text("type").default('blog').notNull(), // blog, youtube, news
   isActive: integer("is_active", { mode: "boolean" }).default(true).notNull(),
   lastScrapedAt: integer("last_scraped_at", { mode: "timestamp" }),
-  createdAt: integer("created_at", { mode: "timestamp" }).$default(() => Date.now()),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
 export const contents = sqliteTable("contents", {
@@ -34,7 +34,7 @@ export const contents = sqliteTable("contents", {
   summary: text("summary"),
   topics: text("topics", { mode: "json" }), // JSON for SQLite
   publishedAt: integer("published_at", { mode: "timestamp" }),
-  scrapedAt: integer("scraped_at", { mode: "timestamp" }).$default(() => Date.now()),
+  scrapedAt: integer("scraped_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
   isAnalyzed: integer("is_analyzed", { mode: "boolean" }).default(false).notNull(),
 });
 
@@ -48,7 +48,7 @@ export const briefs = sqliteTable("briefs", {
   contentType: text("content_type"),
   suggestedCopy: text("suggested_copy"),
   status: text("status").default('draft').notNull(), // draft, approved, rejected
-  createdAt: integer("created_at", { mode: "timestamp" }).$default(() => Date.now()),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
   generatedBy: text("generated_by").default('openai'),
 });
 
@@ -58,7 +58,7 @@ export const analysisConfigs = sqliteTable("analysis_configs", {
   minContentLength: integer("min_content_length").default(500),
   topicsOfInterest: text("topics_of_interest", { mode: "json" }), // JSON array for SQLite
   excludePatterns: text("exclude_patterns", { mode: "json" }), // JSON array for SQLite
-  createdAt: integer("created_at", { mode: "timestamp" }).$default(() => Date.now()),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
 export const knowledgeItems = sqliteTable("knowledge_items", {
@@ -69,7 +69,7 @@ export const knowledgeItems = sqliteTable("knowledge_items", {
   content: text("content").notNull(),
   type: text("type").notNull(), // scrape, search, agent, map, crawl
   sourceUrl: text("source_url"),
-  createdAt: integer("created_at", { mode: "timestamp" }).$default(() => Date.now()),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
 export const analyticsTokens = sqliteTable("analytics_tokens", {
@@ -84,8 +84,8 @@ export const analyticsTokens = sqliteTable("analytics_tokens", {
   expiresAt: integer("expires_at", { mode: "timestamp" }),
   isActive: integer("is_active", { mode: "boolean" }).default(true).notNull(),
   isSelected: integer("is_selected", { mode: "boolean" }).default(false).notNull(),
-  createdAt: integer("created_at", { mode: "timestamp" }).$default(() => Date.now()),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).$default(() => Date.now()),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
 // === SCHEMAS ===

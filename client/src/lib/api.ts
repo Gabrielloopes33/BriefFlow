@@ -22,6 +22,14 @@ export async function apiFetch(url: string, options: ApiOptions = {}): Promise<R
     ...((fetchOptions.headers as Record<string, string>) || {}),
   };
 
+  // Attach tenant context for multi-tenant backend routes.
+  const tenantFromEnv = (import.meta as any)?.env?.VITE_TENANT_ID as string | undefined;
+  const tenantFromStorage = typeof window !== "undefined" ? localStorage.getItem("bf_tenant_id") || undefined : undefined;
+  const tenantId = tenantFromEnv || tenantFromStorage || "00000000-0000-0000-0000-000000000010";
+  if (!headers["x-tenant-id"] && tenantId) {
+    headers["x-tenant-id"] = tenantId;
+  }
+
   // Adiciona token de autenticação (exceto se skipAuth = true)
   if (!skipAuth) {
     const { data: { session } } = await supabase.auth.getSession();
@@ -94,6 +102,18 @@ export async function apiPut<T = unknown>(url: string, data: unknown, options: A
   const response = await apiFetch(url, {
     ...options,
     method: "PUT",
+    body: JSON.stringify(data),
+  });
+  return response.json() as Promise<T>;
+}
+
+/**
+ * Wrapper para requisições PATCH
+ */
+export async function apiPatch<T = unknown>(url: string, data: unknown, options: ApiOptions = {}): Promise<T> {
+  const response = await apiFetch(url, {
+    ...options,
+    method: "PATCH",
     body: JSON.stringify(data),
   });
   return response.json() as Promise<T>;

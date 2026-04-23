@@ -352,7 +352,7 @@ app.get("/api/user", (req, res) => {
 });
 
 // Error handling
-app.use((err: any, _req, res, next) => {
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   const status = err.status || err.statusCode || 500;
   const message = err.message || "Internal Server Error";
 

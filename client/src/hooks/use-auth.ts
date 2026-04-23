@@ -4,6 +4,7 @@ import { supabase } from "@shared/supabase";
 
 export function useAuth() {
   const [user, setUser] = useState<any>(null);
+  const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [location, setLocation] = useLocation();
 
@@ -18,6 +19,7 @@ export function useAuth() {
 
         if (session?.user) {
           setUser(session.user);
+          setSession(session);
         }
 
         setLoading(false);
@@ -33,8 +35,10 @@ export function useAuth() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         setUser(session.user);
+        setSession(session);
       } else {
         setUser(null);
+        setSession(null);
       }
       setLoading(false);
     });
@@ -50,8 +54,10 @@ export function useAuth() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
+        setSession(session);
       } else {
         setUser(null);
+        setSession(null);
       }
       setLoading(false);
     });
@@ -65,6 +71,7 @@ export function useAuth() {
 
   return {
     user,
+    session,
     isLoading: loading,
     isAuthenticated: !!user,
     logout,

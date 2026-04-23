@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/components/ui/dialog";
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { useForm } from "react-hook-form";
+import { type InsertClient } from "@shared/schema";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useClients, useCreateClient } from "@/hooks/use-clients";
@@ -117,7 +118,7 @@ export default function Clients() {
     defaultValues: { name: "", description: "", niche: "", targetAudience: "" }
   });
 
-  const onSubmit = (data: InsertClient) => {
+  const onSubmit = (data: any) => {
     mutate(data, {
       onSuccess: () => {
         onOpenChange(false);

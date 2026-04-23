@@ -51,12 +51,10 @@ notepad .env
 
 ### 3. Iniciar Servidor
 ```bash
-# Development
-set NODE_ENV=development && set PORT=5001 && npx tsx server/simple-server.ts
-
-# Ou usando o script
 npm run dev
 ```
+
+`npm run dev` funciona no Windows, Linux e macOS.
 
 ### 4. Acessar Aplicação
 - **Frontend:** http://localhost:5001

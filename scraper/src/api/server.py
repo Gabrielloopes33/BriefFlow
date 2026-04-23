@@ -19,7 +19,8 @@ from models.scraper import (
     Source, Client, ScrapedContent, SourceType,
     ScrapeRequest, ScrapeResponse, SearchRequest, SearchResponse,
     AgentRequest, AgentResponse, MapRequest, MapResponse,
-    CrawlRequest, CrawlResponse
+    CrawlRequest, CrawlResponse,
+    CrawlBatchRequest, CrawlBatchResponse, CrawlBatchContent
 )
 from models.database import Database
 from scrapers.scraper_manager import ScraperManager
@@ -62,6 +63,7 @@ agent_scraper = AgentScraper()
 anthropic_agent_scraper = AnthropicAgentScraper()
 site_mapper = SiteMapper()
 web_crawler = WebCrawler()
+playwright_scraper = scraper_manager.playwright_scraper
 
 # Endpoint para health check
 @app.get("/")
@@ -560,6 +562,76 @@ async def crawl_site(request: CrawlRequest):
         logger.error(f"❌ Erro no crawling: {e}")
         raise HTTPException(status_code=500, detail=f"Erro no crawling: {str(e)}")
 
+# ==================== ENDPOINT CRAWL BATCH (INTEGRAÇÃO COM NODE.JS) ====================
+
+@app.post("/crawl-batch", response_model=CrawlBatchResponse)
+async def crawl_batch(request: CrawlBatchRequest):
+    """
+    Fazer crawling em lote de múltiplas fontes para um cliente/tenant.
+    Usado pelo post-worker.ts do backend Node.js.
+    
+    - tenant_id: ID do tenant (para isolamento)
+    - client_id: ID do cliente
+    - sources: Lista de URLs/fontes para crawlear
+    - use_playwright: Força uso do Playwright para JS rendering
+    """
+    logger.info(f"📦 Crawl batch: tenant={request.tenant_id}, client={request.client_id}, urls={len(request.sources)}")
+    
+    try:
+        urls = [s.url for s in request.sources if s.url]
+        if not urls:
+            raise HTTPException(status_code=400, detail="Nenhuma URL válida fornecida")
+        
+        # Fazer scraping em lote
+        contents = scraper_manager.scrape_batch(
+            urls=urls,
+            use_playwright=request.use_playwright
+        )
+        
+        # Salvar no banco (opcional — pode ser desativado se o Node.js já persistir)
+        saved_count = 0
+        for content in contents:
+            # Usar URL como source_id temporário
+            source_item = next((s for s in request.sources if s.url == content.url), None)
+            source_id = source_item.source_id if source_item and source_item.source_id else f"source_{abs(hash(content.url)) % 100000}"
+            
+            result = db.save_content(content, source_id, request.client_id)
+            if result:
+                saved_count += 1
+        
+        logger.info(f"✅ Crawl batch concluído: {len(contents)}/{len(urls)} sucessos, {saved_count} salvos")
+        
+        # Montar resposta
+        response_contents = []
+        for content in contents:
+            response_contents.append(CrawlBatchContent(
+                title=content.title,
+                url=content.url,
+                content_text=content.content_text,
+                summary=content.summary,
+                author=content.author,
+                published_at=content.published_at.isoformat() if content.published_at else None,
+                tags=content.tags,
+                source_type=content.source_type.value,
+                word_count=content.word_count
+            ))
+        
+        return CrawlBatchResponse(
+            tenant_id=request.tenant_id,
+            client_id=request.client_id,
+            contents=response_contents,
+            total_urls=len(urls),
+            successful=len(contents),
+            failed=len(urls) - len(contents)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Erro no crawl batch: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro no crawling em lote: {str(e)}")
+
+
 # Inicialização
 @app.on_event("startup")
 async def startup_event():
@@ -567,11 +639,14 @@ async def startup_event():
     logger.info("🚀 BriefFlow Content Scraper API iniciada")
     logger.info(f"📁 Banco de dados: {config.get_database_path()}")
     logger.info(f"🌐 API do BriefFlow: {config.get_briefflow_api_url()}")
+    logger.info(f"🎭 Playwright: {'disponível' if playwright_scraper else 'indisponível'}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Evento de desligamento da API"""
     logger.info("🛑 BriefFlow Content Scraper API desligada")
+    if playwright_scraper:
+        playwright_scraper.close()
 
 if __name__ == "__main__":
     import uvicorn

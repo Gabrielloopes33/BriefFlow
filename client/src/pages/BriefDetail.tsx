@@ -61,7 +61,7 @@ export default function BriefDetail() {
               </CardHeader>
               <CardContent>
                 <ul className="list-disc pl-5 space-y-2">
-                  {brief.keyPoints?.map((point, i) => (
+                  {brief.keyPoints?.map((point: any, i: number) => (
                     <li key={i} className="text-foreground/90">{point}</li>
                   ))}
                 </ul>

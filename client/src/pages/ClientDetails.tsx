@@ -120,7 +120,7 @@ function SourcesTab({ clientId }: { clientId: string }) {
               <Badge variant={source.isActive ? "default" : "secondary"}>
                 {source.isActive ? "Active" : "Paused"}
               </Badge>
-              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" onClick={() => deleteSource({ id: source.id, clientId })}>
+              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" onClick={() => deleteSource(source.id)}>
                 <Trash2 className="w-4 h-4" />
               </Button>
             </div>
@@ -143,8 +143,8 @@ function AddSourceDialog({ clientId, open, onOpenChange }: { clientId: string; o
     defaultValues: { name: "", url: "", type: "blog", isActive: true }
   });
 
-  const onSubmit = (data: Omit<InsertSource, "clientId">) => {
-    mutate({ clientId, data }, {
+  const onSubmit = (formData: Omit<InsertSource, "clientId">) => {
+    mutate({ clientId, name: formData.name, url: formData.url, type: formData.type }, {
       onSuccess: () => {
         onOpenChange(false);
         form.reset();

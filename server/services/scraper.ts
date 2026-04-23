@@ -3,7 +3,7 @@
  * Comunicação HTTP entre Node.js backend e Python FastAPI scraper
  */
 
-const SCRAPER_API_URL = process.env.SCRAPER_API_URL || "http://localhost:8000";
+const SCRAPER_API_URL = process.env.SCRAPER_API_URL || process.env.SCRAPER_URL || "http://localhost:8000";
 
 export interface ScrapingRequest {
   source_ids?: string[];

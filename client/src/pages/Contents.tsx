@@ -171,7 +171,7 @@ export default function Contents() {
                           <div className="space-y-2">
                             <h4 className="font-medium text-sm">Pontos Principais:</h4>
                             <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
-                              {content.keyPoints.slice(0, 3).map((point, idx) => (
+                              {content.keyPoints.slice(0, 3).map((point: any, idx: number) => (
                                 <li key={idx}>{point}</li>
                               ))}
                               {content.keyPoints.length > 3 && (
@@ -187,7 +187,7 @@ export default function Contents() {
                             </p>
                             {content.analysis.topics && (
                               <div className="flex flex-wrap gap-1 mt-2">
-                                {content.analysis.topics.map((topic, idx) => (
+                                {content.analysis.topics.map((topic: any, idx: number) => (
                                   <Badge key={idx} variant="outline" className="text-xs">
                                     {topic}
                                   </Badge>

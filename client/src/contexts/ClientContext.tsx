@@ -13,7 +13,7 @@ const ClientContext = createContext<ClientContextType | undefined>(undefined);
 
 interface ClientProviderProps {
   children: ReactNode;
-  initialClients: Client[];
+  initialClients: any[];
 }
 
 export function ClientProvider({ children, initialClients }: ClientProviderProps) {

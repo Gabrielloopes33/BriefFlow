@@ -5,6 +5,8 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { swaggerUi, swaggerSpec } from "./swagger-simple";
 import { authMiddleware } from "./middleware/auth";
+import { registerAllNodes } from "./agents/nodes"; // Registra todos os nós do grafo
+import { setupWebSocketServer } from "./websocket/ws-server"; // WebSocket server
 
 const app = express();
 const httpServer = createServer(app);
@@ -104,6 +106,12 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Registra todos os nós do grafo na inicialização
+  registerAllNodes();
+
+  // Inicializa WebSocket server no httpServer existente
+  setupWebSocketServer(httpServer);
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -134,12 +142,12 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
+  const listenOptions = process.platform === "win32"
+    ? { port, host: "0.0.0.0" }
+    : { port, host: "0.0.0.0", reusePort: true };
+
   httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
+    listenOptions,
     () => {
       log(`serving on port ${port}`);
     },
