@@ -6,7 +6,7 @@
 
 import OpenAI from 'openai';
 
-export type LLMProvider = 'moonshot' | 'openai';
+export type LLMProvider = 'moonshot' | 'openai' | 'groq';
 
 export interface LLMClientConfig {
   apiKey?: string;
@@ -91,6 +91,7 @@ class OpenAICompatibleClient implements LLMClient {
 
 const DEFAULT_MOONSHOT_MODEL = 'moonshot-v1-8k';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+const DEFAULT_GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 /**
  * Retorna o model padrão baseado no provider ativo
@@ -101,6 +102,9 @@ export function getDefaultModel(provider?: LLMProvider): string {
   if (p === 'moonshot') {
     return process.env.MOONSHOT_MODEL || DEFAULT_MOONSHOT_MODEL;
   }
+  if (p === 'groq') {
+    return process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL;
+  }
   return process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
 }
 
@@ -110,6 +114,9 @@ export function getDefaultModel(provider?: LLMProvider): string {
 export function resolvePrimaryProvider(): LLMProvider {
   if (process.env.MOONSHOT_API_KEY && process.env.MOONSHOT_API_KEY.length > 0) {
     return 'moonshot';
+  }
+  if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.length > 0) {
+    return 'groq';
   }
   return 'openai';
 }
@@ -135,7 +142,24 @@ export function createLLMClient(preferred?: LLMProvider): LLMClient {
       });
     }
 
-    console.warn('[llm-provider] MOONSHOT_API_KEY not set, falling back to OpenAI');
+    console.warn('[llm-provider] MOONSHOT_API_KEY not set, falling back to Groq');
+  }
+
+  // Tentar Groq
+  if (primary === 'groq') {
+    const apiKey = process.env.GROQ_API_KEY;
+    const baseURL = process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1';
+    const model = process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL;
+
+    if (apiKey) {
+      return new OpenAICompatibleClient('groq', model, {
+        apiKey,
+        baseURL,
+        timeout: 60000,
+      });
+    }
+
+    console.warn('[llm-provider] GROQ_API_KEY not set, falling back to OpenAI');
   }
 
   // Fallback para OpenAI
@@ -145,7 +169,7 @@ export function createLLMClient(preferred?: LLMProvider): LLMClient {
 
   if (!apiKey) {
     throw new Error(
-      'No LLM provider configured. Set MOONSHOT_API_KEY or OPENAI_API_KEY.'
+      'No LLM provider configured. Set MOONSHOT_API_KEY, GROQ_API_KEY or OPENAI_API_KEY.'
     );
   }
 
@@ -180,7 +204,22 @@ export function createLangChainClient(preferred?: LLMProvider): {
         },
       };
     }
-    console.warn('[llm-provider] MOONSHOT_API_KEY not set, falling back to OpenAI for LangChain');
+    console.warn('[llm-provider] MOONSHOT_API_KEY not set, falling back to Groq for LangChain');
+  }
+
+  if (primary === 'groq') {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (apiKey) {
+      return {
+        modelName: process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL,
+        temperature: 0.5,
+        openAIApiKey: apiKey,
+        configuration: {
+          baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
+        },
+      };
+    }
+    console.warn('[llm-provider] GROQ_API_KEY not set, falling back to OpenAI for LangChain');
   }
 
   const apiKey = process.env.OPENAI_API_KEY;
@@ -202,6 +241,7 @@ export function createLangChainClient(preferred?: LLMProvider): {
 export function isLLMConfigured(): boolean {
   return !!(
     process.env.MOONSHOT_API_KEY ||
+    process.env.GROQ_API_KEY ||
     process.env.OPENAI_API_KEY
   );
 }

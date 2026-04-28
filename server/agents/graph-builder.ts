@@ -159,8 +159,13 @@ export class AgentGraph {
     }
 
     const completed = new Set<string>();
+    // __start__ é um nó virtual do ReactFlow — considera sempre completado
+    completed.add('__start__');
 
     // Executa nós em níveis (paralelos quando possível)
+    console.log(`[graph-builder] Starting execution. Nodes: ${this.definition.nodes.map(n => n.id).join(', ')}, Edges: ${this.definition.edges.map(e => `${e.from}->${e.to}`).join(', ')}`);
+    console.log(`[graph-builder] Predecessors:`, Object.fromEntries(predecessors));
+    
     while (completed.size < this.definition.nodes.length) {
       // Encontra nós prontos: todos os predecessores completados
       const ready = this.definition.nodes.filter((node) => {
@@ -168,13 +173,17 @@ export class AgentGraph {
         const preds = predecessors.get(node.id) || [];
         return preds.every((pred) => completed.has(pred));
       });
+      
+      console.log(`[graph-builder] Iteration: completed=${Array.from(completed).join(', ')}, ready=${ready.map(n => n.id).join(', ')}`);
 
       if (ready.length === 0) {
+        console.warn(`[graph-builder] No ready nodes but ${this.definition.nodes.length - completed.size} nodes remaining. Deadlock detected?`);
         // Evita loop infinito em grafos cíclicos
         break;
       }
 
       // Executa nós prontos em paralelo
+      console.log(`[graph-builder] Executing nodes: ${ready.map(n => `${n.id}(${n.type})`).join(', ')}`);
       const results = await Promise.allSettled(
         ready.map(async (nodeDef) => {
           onNodeStart?.(nodeDef.id);
@@ -182,6 +191,7 @@ export class AgentGraph {
 
           try {
             const executor = getNodeHandler(nodeDef.type);
+            console.log(`[graph-builder] Calling handler for ${nodeDef.id} with config:`, nodeDef.config);
             const output = await executor(state, nodeDef.config);
 
             return {

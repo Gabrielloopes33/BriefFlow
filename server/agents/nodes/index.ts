@@ -10,6 +10,10 @@ import { reviewerNode } from './reviewer';
 import { metricsAnalystNode } from './metrics-analyst';
 import { referencesNode } from './references';
 import { visualFormatterNode } from './visual-formatter';
+import { customNode } from './custom';
+import { carouselWriterNode } from './carousel-writer';
+import { imagePromptEngineerNode } from './image-prompt-engineer';
+import { contentStrategyNode } from './content-strategy';
 
 /**
  * Registra todos os nós built-in no registry
@@ -22,8 +26,12 @@ export function registerAllNodes(): void {
   registerNode('metrics-analyst', metricsAnalystNode, 'Analisa performance do cliente e gera insights');
   registerNode('references', referencesNode, 'Busca e ranqueia referências relevantes do cliente');
   registerNode('visual-formatter', visualFormatterNode, 'Estrutura conteúdo em slides para o editor visual');
+  registerNode('custom', customNode, 'Executa um agente customizado do banco');
+  registerNode('content-strategy', contentStrategyNode, 'Define ângulo, pilar e hook do conteúdo antes da pesquisa');
+  registerNode('carousel-writer', carouselWriterNode, 'Gera copy de carrossel otimizado para Instagram');
+  registerNode('image-prompt-engineer', imagePromptEngineerNode, 'Gera prompts de imagem para cada slide');
 
-  console.log('[node-registry] Registered nodes:', 'researcher, writer, reviewer, metrics-analyst, references, visual-formatter');
+  console.log('[node-registry] Registered nodes:', 'researcher, writer, reviewer, metrics-analyst, references, visual-formatter, custom, content-strategy, carousel-writer, image-prompt-engineer');
 }
 
 // Re-exporta os nós individuais para uso direto
@@ -33,6 +41,10 @@ export { reviewerNode } from './reviewer';
 export { metricsAnalystNode } from './metrics-analyst';
 export { referencesNode } from './references';
 export { visualFormatterNode } from './visual-formatter';
+export { customNode } from './custom';
+export { contentStrategyNode } from './content-strategy';
+export { carouselWriterNode } from './carousel-writer';
+export { imagePromptEngineerNode } from './image-prompt-engineer';
 
 // Auto-registra na importação (para compatibilidade com imports diretos)
 registerAllNodes();

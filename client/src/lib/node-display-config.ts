@@ -61,6 +61,13 @@ export const NODE_DISPLAY_CONFIG: Record<string, NodeDisplayInfo> = {
     color: "#6b7280",
     tailwindColor: "gray",
   },
+  start: {
+    label: "Início",
+    icon: "🚀",
+    description: "Ponto de partida do fluxo",
+    color: "#f97316",
+    tailwindColor: "orange",
+  },
 };
 
 /**

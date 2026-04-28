@@ -3,6 +3,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ClientSelector } from "@/components/studio/ClientSelector";
 import { ConversationalInput } from "@/components/studio/ConversationalInput";
 import { QuickActionChips } from "@/components/studio/QuickActionChips";
@@ -206,6 +207,13 @@ export function StudioPage() {
   }
 
   const isGenerating = jobStatus === "processing" || jobStatus === "queued";
+  const creativeHubHref = selectedClient
+    ? `/creatives/new?client_id=${encodeURIComponent(selectedClient)}`
+    : "/creatives/new";
+
+  const resultCreativeHref = resultPost
+    ? `/creatives/new?client_id=${encodeURIComponent(selectedClient)}&post_id=${encodeURIComponent(resultPost.id)}`
+    : undefined;
 
   return (
     <AppShell>
@@ -213,8 +221,15 @@ export function StudioPage() {
         <div className="mx-auto w-full max-w-4xl space-y-6">
           <div className="space-y-2">
             <Badge className="bg-primary/20 text-primary border-primary/30">Studio</Badge>
-            <h1 className="text-3xl font-bold tracking-tight">Crie conteúdo em poucos minutos</h1>
-            <p className="text-muted-foreground">Descreva o conteúdo desejado e o BriefFlow cuida da geração completa.</p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-2">
+                <h1 className="text-3xl font-bold tracking-tight">Crie conteúdo em poucos minutos</h1>
+                <p className="text-muted-foreground">Descreva o conteúdo desejado e o BriefFlow cuida da geração completa.</p>
+              </div>
+              <a href={creativeHubHref}>
+                <Button variant="outline">Ir para Creative</Button>
+              </a>
+            </div>
           </div>
 
           <Card className="border-border/60 bg-card/70">
@@ -258,7 +273,7 @@ export function StudioPage() {
             </Alert>
           ) : null}
 
-          <GenerationResult post={resultPost} creativeId={resultCreativeId} />
+          <GenerationResult post={resultPost} creativeId={resultCreativeId} creativeEntryHref={resultCreativeHref} />
 
           <Card className="border-border/60 bg-card/70">
             <CardHeader>

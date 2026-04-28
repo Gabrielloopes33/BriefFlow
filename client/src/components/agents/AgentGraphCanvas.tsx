@@ -42,7 +42,7 @@ function AgentNode({ data, selected }: { data: any; selected?: boolean }) {
           {displayInfo.icon}
         </div>
         <div className="min-w-0">
-          <p className="text-sm font-medium truncate">{displayInfo.label}</p>
+          <p className="text-sm font-medium truncate">{data.label || displayInfo.label}</p>
           <p className="text-xs text-muted-foreground">{displayInfo.description}</p>
         </div>
       </div>
@@ -94,6 +94,23 @@ export function AgentGraphCanvas({ readOnly = false, onNodesChange, onEdgesChang
 
   // Sync store -> ReactFlow
   useEffect(() => {
+    const startDisplayInfo = getNodeDisplayInfo("start");
+    const startNode: Node = {
+      id: "__start__",
+      type: "agent",
+      position: { x: 250, y: 20 },
+      data: {
+        label: startDisplayInfo.label,
+        type: "start",
+        agentId: "",
+        status: "idle",
+        outputSummary: undefined,
+      },
+      selected: false,
+      draggable: false,
+      deletable: false,
+    };
+
     const rfNodes: Node[] = storeNodes.map((n) => {
       const displayInfo = getNodeDisplayInfo(n.type);
       return {
@@ -101,7 +118,7 @@ export function AgentGraphCanvas({ readOnly = false, onNodesChange, onEdgesChang
         type: "agent",
         position: n.position,
         data: {
-          label: displayInfo.label,
+          label: n.label || displayInfo.label,
           type: n.type,
           agentId: n.agentId,
           status: n.status,
@@ -110,7 +127,7 @@ export function AgentGraphCanvas({ readOnly = false, onNodesChange, onEdgesChang
         selected: false,
       };
     });
-    setNodes(rfNodes);
+    setNodes([startNode, ...rfNodes]);
   }, [storeNodes, setNodes]);
 
   useEffect(() => {
@@ -134,24 +151,32 @@ export function AgentGraphCanvas({ readOnly = false, onNodesChange, onEdgesChang
     onEdgesChange?.(edges);
   }, [edges, onEdgesChange]);
 
+  const addEdgeToStore = useAgentBoardStore((s) => s.addEdge);
+
   const onConnect = useCallback(
     (connection: Connection) => {
       if (readOnly) return;
-      setEdges((eds) =>
-        addEdge(
-          {
-            ...connection,
-            style: { stroke: "#64748b", strokeWidth: 2 },
-          } as Edge,
-          eds
-        )
-      );
+      const newEdge: Edge = {
+        ...connection,
+        id: `edge-${Date.now()}`,
+        style: { stroke: "#64748b", strokeWidth: 2 },
+      };
+      setEdges((eds) => addEdge(newEdge, eds));
+      // Sync to Zustand store so save works
+      addEdgeToStore({
+        id: newEdge.id,
+        source: connection.source!,
+        target: connection.target!,
+        label: undefined,
+        animated: false,
+      });
     },
-    [readOnly, setEdges]
+    [readOnly, setEdges, addEdgeToStore]
   );
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
+      if (node.id === "__start__") return; // START node is not selectable
       setSelectedNode(node.id);
     },
     [setSelectedNode]

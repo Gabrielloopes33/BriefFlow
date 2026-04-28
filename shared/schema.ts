@@ -1,7 +1,6 @@
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { pgTable, text as pgText, serial, integer as pgInteger, boolean as pgBoolean, timestamp as pgTimestamp, uuid as pgUuid, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod";
 
 // Database agnostic table exports
 export const clients = sqliteTable("clients", {
@@ -100,23 +99,25 @@ export const insertAnalyticsTokenSchema = createInsertSchema(analyticsTokens).om
 
 // === TYPES ===
 
+type InferSchemaType<TSchema> = TSchema extends { _type: infer TOutput } ? TOutput : never;
+
 export type Client = typeof clients.$inferSelect;
-export type InsertClient = z.infer<typeof insertClientSchema>;
+export type InsertClient = InferSchemaType<typeof insertClientSchema>;
 
 export type Source = typeof sources.$inferSelect;
-export type InsertSource = z.infer<typeof insertSourceSchema>;
+export type InsertSource = InferSchemaType<typeof insertSourceSchema>;
 
 export type Content = typeof contents.$inferSelect;
-export type InsertContent = z.infer<typeof insertContentSchema>;
+export type InsertContent = InferSchemaType<typeof insertContentSchema>;
 
 export type Brief = typeof briefs.$inferSelect;
-export type InsertBrief = z.infer<typeof insertBriefSchema>;
+export type InsertBrief = InferSchemaType<typeof insertBriefSchema>;
 
 export type AnalysisConfig = typeof analysisConfigs.$inferSelect;
-export type InsertAnalysisConfig = z.infer<typeof insertAnalysisConfigSchema>;
+export type InsertAnalysisConfig = InferSchemaType<typeof insertAnalysisConfigSchema>;
 
 export type KnowledgeItem = typeof knowledgeItems.$inferSelect;
-export type InsertKnowledgeItem = z.infer<typeof insertKnowledgeItemSchema>;
+export type InsertKnowledgeItem = InferSchemaType<typeof insertKnowledgeItemSchema>;
 
 export type AnalyticsToken = typeof analyticsTokens.$inferSelect;
-export type InsertAnalyticsToken = z.infer<typeof insertAnalyticsTokenSchema>;
+export type InsertAnalyticsToken = InferSchemaType<typeof insertAnalyticsTokenSchema>;

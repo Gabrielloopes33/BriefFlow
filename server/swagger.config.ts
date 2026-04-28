@@ -13,6 +13,8 @@ import {
   analysisConfigs
 } from '../shared/schema';
 
+const toOpenApiSchema = (schema: unknown) => zodToOpenAPISchema(schema as any);
+
 // Opções do Swagger
 const options: swaggerJsdoc.Options = {
   definition: {
@@ -38,24 +40,24 @@ const options: swaggerJsdoc.Options = {
     components: {
       schemas: {
         // Client schemas
-        Client: zodToOpenAPISchema(insertClientSchema),
-        InsertClient: zodToOpenAPISchema(insertClientSchema),
+        Client: toOpenApiSchema(insertClientSchema),
+        InsertClient: toOpenApiSchema(insertClientSchema),
         
         // Source schemas
-        Source: zodToOpenAPISchema(insertSourceSchema),
-        InsertSource: zodToOpenAPISchema(insertSourceSchema),
+        Source: toOpenApiSchema(insertSourceSchema),
+        InsertSource: toOpenApiSchema(insertSourceSchema),
         
         // Content schemas
-        Content: zodToOpenAPISchema(insertContentSchema),
-        InsertContent: zodToOpenAPISchema(insertContentSchema),
+        Content: toOpenApiSchema(insertContentSchema),
+        InsertContent: toOpenApiSchema(insertContentSchema),
         
         // Brief schemas
-        Brief: zodToOpenAPISchema(insertBriefSchema),
-        InsertBrief: zodToOpenAPISchema(insertBriefSchema),
+        Brief: toOpenApiSchema(insertBriefSchema),
+        InsertBrief: toOpenApiSchema(insertBriefSchema),
         
         // AnalysisConfig schemas
-        AnalysisConfig: zodToOpenAPISchema(insertAnalysisConfigSchema),
-        InsertAnalysisConfig: zodToOpenAPISchema(insertAnalysisConfigSchema),
+        AnalysisConfig: toOpenApiSchema(insertAnalysisConfigSchema),
+        InsertAnalysisConfig: toOpenApiSchema(insertAnalysisConfigSchema),
         
         // Error schemas
         Error: {

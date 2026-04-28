@@ -16,9 +16,16 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertSourceSchema, type InsertSource } from "@shared/schema";
+import { insertSourceSchema } from "@shared/schema";
 import { Loader2, Plus, Trash2, Globe, FileText, Sparkles, ExternalLink } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+
+type SourceFormValues = {
+  name: string;
+  url: string;
+  type: "blog" | "news" | "youtube";
+  isActive: boolean;
+};
 
 export default function ClientDetails() {
   const [match, params] = useRoute("/clients/:id");
@@ -138,12 +145,12 @@ function SourcesTab({ clientId }: { clientId: string }) {
 
 function AddSourceDialog({ clientId, open, onOpenChange }: { clientId: string; open: boolean; onOpenChange: (o: boolean) => void }) {
   const { mutate, isPending } = useCreateSource();
-  const form = useForm<Omit<InsertSource, "clientId">>({
-    resolver: zodResolver(insertSourceSchema.omit({ clientId: true })),
+  const form = useForm<SourceFormValues>({
+    resolver: zodResolver(insertSourceSchema.omit({ clientId: true }) as any),
     defaultValues: { name: "", url: "", type: "blog", isActive: true }
   });
 
-  const onSubmit = (formData: Omit<InsertSource, "clientId">) => {
+  const onSubmit = (formData: SourceFormValues) => {
     mutate({ clientId, name: formData.name, url: formData.url, type: formData.type }, {
       onSuccess: () => {
         onOpenChange(false);

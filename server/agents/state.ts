@@ -55,6 +55,9 @@ export interface AgentState {
     title: string;
     content: string;
   };
+  contentBrief?: string;
+  slides?: Array<{ title: string; subtitle: string }>;
+  imagePrompts?: string[];
   review: {
     score: number;
     feedback: string;
@@ -68,6 +71,9 @@ export interface AgentState {
     models: string[];
     traceId?: string;
   };
+
+  // Payload original (para acesso a parâmetros extras)
+  payload?: any;
 
   // Controle de fluxo
   retryCount: number;
@@ -104,6 +110,7 @@ export function createInitialState(params: {
     draft: { title: '', content: '' },
     review: { score: 0, feedback: '', approved: false },
     metadata: { totalTokens: 0, totalLatency: 0, models: [] },
+    payload: p,
     retryCount: 0,
     errors: [],
   };

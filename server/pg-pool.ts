@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Pool, PoolClient } from 'pg';
 
 export const pool = new Pool({
@@ -9,13 +10,13 @@ export const pool = new Pool({
 });
 
 // Ensure network/socket errors on checked-out clients never crash the process.
-pool.on('connect', (client) => {
-  client.on('error', (err) => {
+pool.on('connect', (client: PoolClient) => {
+  client.on('error', (err: Error) => {
     console.error('[pg-client] connection error', err);
   });
 });
 
-pool.on('error', (err) => {
+pool.on('error', (err: Error) => {
   console.error('[pg-pool] unexpected error on idle client', err);
 });
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ComponentType } from "react";
 import { UseFormReturn } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,7 @@ function inferSourceType(url: string): SourceItem["type"] {
   return "blog";
 }
 
-const TYPE_ICONS: Record<SourceItem["type"], React.ComponentType<{ size?: number; className?: string }>> = {
+const TYPE_ICONS: Record<SourceItem["type"], ComponentType<{ size?: string | number; className?: string }>> = {
   blog: Globe,
   youtube: Youtube,
   instagram: Instagram,
@@ -32,7 +32,15 @@ interface Props {
 
 export function Step3Sources({ form }: Props) {
   const [urlInput, setUrlInput] = useState("");
-  const sources: SourceItem[] = form.watch("sources") ?? [];
+  const watchedSources = form.watch("sources");
+  const sources: SourceItem[] = Array.isArray(watchedSources)
+    ? watchedSources.filter(
+        (item): item is SourceItem =>
+          !!item &&
+          typeof item.url === "string" &&
+          ["instagram", "linkedin", "blog", "youtube"].includes(String(item.type))
+      )
+    : [];
 
   function addSource() {
     const trimmed = urlInput.trim();

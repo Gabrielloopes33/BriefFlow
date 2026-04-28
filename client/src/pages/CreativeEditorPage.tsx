@@ -31,18 +31,18 @@ export function CreativeEditorPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      <div className="flex items-center justify-center h-screen bg-background">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
       </div>
     );
   }
 
   if (error || !creative) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen gap-3">
-        <AlertCircle className="w-10 h-10 text-red-500" />
-        <p className="text-gray-600">Erro ao carregar criativo</p>
-        <p className="text-sm text-gray-400">{error?.message}</p>
+      <div className="flex flex-col items-center justify-center h-screen gap-3 bg-background text-foreground">
+        <AlertCircle className="w-10 h-10 text-red-400" />
+        <p className="text-muted-foreground">Erro ao carregar criativo</p>
+        <p className="text-sm text-muted-foreground/70">{error?.message}</p>
       </div>
     );
   }

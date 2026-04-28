@@ -79,29 +79,33 @@ export function AgentBoardPage() {
   const [isAddNodeOpen, setIsAddNodeOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [edgeCondition, setEdgeCondition] = useState("");
+  const [isDefault, setIsDefault] = useState(false);
 
   // Load graph into store
   useEffect(() => {
-    if (graph?.nodes && graph?.edges) {
-      const boardNodes = graph.nodes.map((n: any) => ({
-        id: n.id,
-        agentId: n.agentId,
-        type: n.type,
-        label: agents?.find((a) => a.id === n.agentId)?.name || n.type,
-        position: n.position || { x: Math.random() * 400, y: Math.random() * 300 },
-        config: n.config,
-        status: "idle" as const,
-      }));
+    if (graph) {
+      setIsDefault(graph.is_default || false);
+      if (graph.nodes && graph.edges) {
+        const boardNodes = graph.nodes.map((n: any) => ({
+          id: n.id,
+          agentId: n.agentId,
+          type: n.type,
+          label: agents?.find((a) => a.id === n.agentId)?.name || n.type,
+          position: n.position || { x: Math.random() * 400, y: Math.random() * 300 },
+          config: n.config,
+          status: "idle" as const,
+        }));
 
-      const boardEdges = graph.edges.map((e: any) => ({
-        id: e.id,
-        source: e.from,
-        target: e.to,
-        label: e.condition,
-      }));
+        const boardEdges = graph.edges.map((e: any) => ({
+          id: e.id,
+          source: e.from,
+          target: e.to,
+          label: e.condition,
+        }));
 
-      setNodes(boardNodes);
-      setEdges(boardEdges);
+        setNodes(boardNodes);
+        setEdges(boardEdges);
+      }
     }
 
     return () => reset();
@@ -127,7 +131,7 @@ export function AgentBoardPage() {
 
     updateGraph.mutate({
       id: graphId,
-      data: { nodes, edges },
+      data: { nodes, edges, is_default: isDefault },
     });
 
     addLog({
@@ -294,6 +298,15 @@ export function AgentBoardPage() {
           >
             <Play className="w-4 h-4 mr-1" />
             Simular
+          </Button>
+
+          <Button
+            variant={isDefault ? "default" : "outline"}
+            size="sm"
+            onClick={() => setIsDefault(!isDefault)}
+            title={isDefault ? "Este é o fluxo padrão" : "Definir como fluxo padrão"}
+          >
+            {isDefault ? "Padrão ✓" : "Definir Padrão"}
           </Button>
 
           <Button size="sm" onClick={handleSave} disabled={updateGraph.isPending}>

@@ -1,0 +1,7 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - img [ref=e6]
+    - paragraph [ref=e8]: Erro ao carregar criativo
+    - paragraph [ref=e9]: Creative not found
+  - region "Notifications (F8)":
+    - list

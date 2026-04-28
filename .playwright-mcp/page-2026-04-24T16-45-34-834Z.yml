@@ -1,0 +1,106 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: BF
+        - generic [ref=e7]: BriefFlow
+      - generic [ref=e8]:
+        - button "New Project" [ref=e9] [cursor=pointer]:
+          - img [ref=e10]
+          - generic [ref=e11]: New Project
+        - link "Overview" [ref=e12] [cursor=pointer]:
+          - /url: /dashboard
+          - img [ref=e13]
+          - generic [ref=e18]: Overview
+        - link "Studio" [ref=e19] [cursor=pointer]:
+          - /url: /studio
+          - img [ref=e20]
+          - generic [ref=e23]: Studio
+        - link "Clientes" [ref=e24] [cursor=pointer]:
+          - /url: /clients
+          - img [ref=e25]
+          - generic [ref=e30]: Clientes
+        - link "Biblioteca" [ref=e31] [cursor=pointer]:
+          - /url: /library
+          - img [ref=e32]
+          - generic [ref=e35]: Biblioteca
+        - link "Agentes" [ref=e36] [cursor=pointer]:
+          - /url: /agents
+          - img [ref=e37]
+          - generic [ref=e40]: Agentes
+        - link "Analytics" [ref=e41] [cursor=pointer]:
+          - /url: /analytics
+          - img [ref=e42]
+          - generic [ref=e43]: Analytics
+        - link "Settings" [ref=e44] [cursor=pointer]:
+          - /url: /settings
+          - img [ref=e45]
+          - generic [ref=e48]: Settings
+      - generic [ref=e50]:
+        - generic [ref=e52]: JD
+        - generic [ref=e53]:
+          - generic [ref=e54]: John Doe
+          - generic [ref=e55]: Pro Plan
+    - main [ref=e56]:
+      - generic [ref=e57]:
+        - generic [ref=e60]: SYSTEM ONLINE
+        - generic [ref=e62]: "API: ENABLED"
+      - generic [ref=e65]:
+        - generic [ref=e66]:
+          - img [ref=e68]
+          - generic [ref=e70]:
+            - heading "Gerador de Carrossel com IA" [level=1] [ref=e71]
+            - paragraph [ref=e72]: Configure o briefing e gere um creative pronto para edicao.
+        - generic [ref=e73]:
+          - generic [ref=e74]:
+            - generic [ref=e75]: Client ID
+            - textbox "Client ID" [ref=e76]:
+              - /placeholder: UUID do cliente
+              - text: 6ce1b391-b9f1-4302-8e45-f6757898b1d3
+          - generic [ref=e77]:
+            - generic [ref=e78]: Prompt
+            - textbox "Prompt" [ref=e79]:
+              - /placeholder: "Ex: Crie um carrossel sobre 5 erros comuns em marketing de conteudo"
+          - generic [ref=e80]:
+            - generic [ref=e81]:
+              - generic [ref=e82]: Numero de slides
+              - spinbutton "Numero de slides" [ref=e83]: "6"
+            - generic [ref=e84]:
+              - generic [ref=e85]: Modo de imagem
+              - combobox "Modo de imagem" [ref=e86]:
+                - option "Apenas fundo"
+                - option "Apenas grade"
+                - option "Fundo + grade" [selected]
+          - generic [ref=e87]:
+            - generic [ref=e88]:
+              - generic [ref=e89]: Modo de layout
+              - combobox "Modo de layout" [ref=e90]:
+                - option "Minimalista" [selected]
+                - option "Profile"
+            - generic [ref=e91]:
+              - generic [ref=e92]: Instagram handle
+              - textbox "Instagram handle" [ref=e93]:
+                - /placeholder: "@sua_marca"
+          - generic [ref=e94]:
+            - generic [ref=e95]: Estilo visual da imagem (opcional)
+            - textbox "Estilo visual da imagem (opcional)" [ref=e96]:
+              - /placeholder: "Ex: foto realista, luz natural, fundo limpo"
+          - generic [ref=e97]:
+            - generic [ref=e98]:
+              - generic [ref=e99]: Combinacao de fontes
+              - combobox "Combinacao de fontes" [ref=e100]:
+                - option "Space + Inter" [selected]
+                - option "Syne + Outfit"
+                - option "DM Sans + Raleway"
+                - option "Oswald + Inter"
+                - option "Playfair + DM Sans"
+                - option "Caveat + Inter"
+            - generic [ref=e101]:
+              - generic [ref=e102]: Cor de destaque
+              - textbox "Cor de destaque" [ref=e103]: "#3b82f6"
+          - generic [ref=e104]:
+            - checkbox "Gerar imagens automaticamente" [checked] [ref=e105]
+            - text: Gerar imagens automaticamente
+          - button "Gerar carrossel" [ref=e106] [cursor=pointer]
+  - region "Notifications (F8)":
+    - list

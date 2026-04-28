@@ -7,6 +7,7 @@ import { useRef, useEffect, useState } from 'react';
 import { Text, Transformer } from 'react-konva';
 import type Konva from 'konva';
 import type { TextLayer as TextLayerType } from '@/lib/creative-editor-types';
+import { FONT_NAME_MAP } from '../FontLoader';
 
 interface TextLayerProps {
   layer: TextLayerType;
@@ -39,10 +40,10 @@ export function TextLayer({ layer, isSelected, onSelect, onChange, onEditStart }
         x={layer.x}
         y={layer.y}
         width={layer.width}
-        height={layer.height}
+          wrap="word"
         text={layer.text}
         fontSize={layer.fontSize}
-        fontFamily={layer.fontFamily || 'Inter, sans-serif'}
+        fontFamily={FONT_NAME_MAP[layer.fontFamily ?? ''] || layer.fontFamily || 'Inter, sans-serif'}
         fontStyle={layer.fontWeight === 'bold' ? 'bold' : 'normal'}
         fill={layer.color}
         align={layer.align}

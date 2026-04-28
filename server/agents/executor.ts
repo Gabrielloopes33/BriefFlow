@@ -51,7 +51,10 @@ export async function loadGraphDefinition(
       id: rows[0].id,
       tenantId: rows[0].tenant_id,
       name: rows[0].name,
-      nodes: rows[0].nodes || [],
+      nodes: (rows[0].nodes || []).map((n: any) => ({
+        ...n,
+        config: { ...n.config, agentId: n.agentId },
+      })),
       edges: rows[0].edges || [],
     };
   } finally {
@@ -79,7 +82,10 @@ export async function loadDefaultGraph(
       id: rows[0].id,
       tenantId: rows[0].tenant_id,
       name: rows[0].name,
-      nodes: rows[0].nodes || [],
+      nodes: (rows[0].nodes || []).map((n: any) => ({
+        ...n,
+        config: { ...n.config, agentId: n.agentId },
+      })),
       edges: rows[0].edges || [],
     };
   } finally {
@@ -271,6 +277,9 @@ export async function executeGraph(options: ExecutionOptions): Promise<{
   });
 
   // 6. Executa o fluxo
+  console.log(`[executor] Building graph with ${graphDef.nodes.length} nodes and ${graphDef.edges.length} edges`);
+  console.log(`[executor] Nodes:`, graphDef.nodes.map(n => ({ id: n.id, type: n.type, agentId: n.agentId })));
+  
   const graph = buildGraph(graphDef);
   const nodeResultsMap: Record<string, any> = {};
 
@@ -317,6 +326,9 @@ export async function executeGraph(options: ExecutionOptions): Promise<{
   });
 
   // 7. Finaliza execução e emite evento final
+  console.log(`[executor] Graph execution result: status=${result.status}, draft.title=${result.finalState.draft?.title}, draft.content length=${result.finalState.draft?.content?.length}`);
+  console.log(`[executor] Errors:`, result.finalState.errors);
+  
   const finalStatus = result.status === 'completed' ? 'completed' : 'failed';
 
   if (finalStatus === 'completed') {

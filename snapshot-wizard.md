@@ -1,0 +1,11 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]
+      - generic [ref=e8]
+      - generic [ref=e50]
+    - main [ref=e56]:
+      - generic [ref=e57]
+      - generic [ref=e65]
+  - region "Notifications (F8)":
+    - list

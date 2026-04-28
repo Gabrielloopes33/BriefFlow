@@ -170,6 +170,32 @@ async function processJob(job: JobRow, pool: Pool) {
       } else {
         console.log(`[post-worker] No sources found for client ${job.client_id}`);
       }
+
+      // Busca opcional de trends via Apify (quando solicitado no payload)
+      const trendSearch = payload.trend_search as { platform?: string; hashtag?: string; maxResults?: number } | undefined;
+      if (trendSearch && process.env.APIFY_API_TOKEN) {
+        try {
+          const { ApifySocialProvider } = await import('./apify-social-provider');
+          const apify = new ApifySocialProvider();
+          const platform = (trendSearch.platform || 'tiktok').toLowerCase();
+          const hashtag = trendSearch.hashtag || clientNiche || 'marketing';
+          const maxResults = trendSearch.maxResults || 20;
+
+          console.log(`[post-worker] Buscando trends: ${platform} #${hashtag}`);
+
+          let trends: any[] = [];
+          if (platform === 'tiktok') {
+            trends = await apify.fetchTikTokHashtag({ hashtag, maxResults });
+          } else if (platform === 'instagram') {
+            trends = await apify.fetchInstagramHashtag({ hashtag, maxResults });
+          }
+
+          crawledContents.push(...trends);
+          console.log(`[post-worker] Trends encontrados: ${trends.length}`);
+        } catch (trendErr: any) {
+          console.error('[post-worker] Erro ao buscar trends:', trendErr.message);
+        }
+      }
     } catch (crawlErr: any) {
       console.error('[post-worker] Crawling error:', crawlErr.message);
       // Não falha o job — continua sem conteúdo crawleado

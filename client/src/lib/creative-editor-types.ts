@@ -6,6 +6,104 @@
 export interface SlideBackground {
   type: 'color' | 'gradient' | 'image';
   value: string; // hex, gradient CSS, ou URL
+  imagePositionX?: number;
+  imagePositionY?: number;
+  imageZoom?: number;
+}
+
+export type TextPosition =
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'mid-left'
+  | 'mid'
+  | 'mid-right'
+  | 'bot-left'
+  | 'bot-center'
+  | 'bot-right';
+
+export type FontFamily =
+  | 'Inter'
+  | 'Space'
+  | 'Syne'
+  | 'Outfit'
+  | 'DM Sans'
+  | 'Raleway'
+  | 'Oswald'
+  | 'Playfair'
+  | 'Caveat';
+
+export interface SlideOverlay {
+  style: 'none' | 'base' | 'base-forte' | 'topo-forte' | 'diag-inf-dir' | 'diag-sup-esq';
+  opacity: number;
+  color: string;
+}
+
+export interface ImagePlacement {
+  type: 'background' | 'inset-top' | 'inset-mid' | 'inset-bottom' | 'side-right' | 'side-left' | 'inset-small-mid';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  borderRadius: number;
+  objectFit: 'cover' | 'contain';
+}
+
+export interface SlideImageGrid {
+  visible: boolean;
+  imageUrl?: string;
+  borderRadius?: number;
+  placement?: ImagePlacement;
+}
+
+export interface SlideTextLayout {
+  position: TextPosition;
+  alignment: 'left' | 'center' | 'right';
+  title: string;
+  subtitle: string;
+}
+
+export interface SlideTypography {
+  globalScale: number;
+  titleFontSize: number;
+  titleFontFamily: FontFamily;
+  subtitleFontSize: number;
+  accentColor: string;
+  accentWords: string[];
+}
+
+export interface SlideProfileBadge {
+  visible: boolean;
+  imageUrl?: string;
+  name: string;
+  handle: string;
+  style: 'solid' | 'minimal' | 'glass';
+  size: number;
+  position: TextPosition;
+}
+
+export interface SlideCtaButton {
+  visible: boolean;
+  text: string;
+  style: 'filled' | 'outline' | 'glass';
+  size: number;
+  borderRadius: number;
+  backgroundColor: string;
+  textColor: string;
+}
+
+export interface FontCombination {
+  title: FontFamily;
+  body: FontFamily;
+}
+
+export interface ProfileConfig {
+  photoUrl?: string;
+  name: string;
+  handle: string;
+  badgeStyle: 'solid' | 'minimal' | 'glass';
+  thumbnailCount: 1 | 2 | 'alternating';
+  borderRadius: number;
 }
 
 export interface BaseLayer {
@@ -54,7 +152,14 @@ export type Layer = TextLayer | ImageLayer | ShapeLayer;
 export interface Slide {
   id: string;
   index: number;
+  theme?: 'dark' | 'light';
   background: SlideBackground;
+  overlay?: SlideOverlay;
+  imageGrid?: SlideImageGrid;
+  textLayout?: SlideTextLayout;
+  typography?: SlideTypography;
+  profileBadge?: SlideProfileBadge;
+  ctaButton?: SlideCtaButton;
   layers: Layer[];
 }
 
@@ -68,6 +173,7 @@ export interface CreativeTemplate {
   structure: {
     width: number;
     height: number;
+    format?: 'square' | 'portrait' | 'story';
     slides: Slide[];
   };
   thumbnailUrl: string | null;
@@ -84,11 +190,60 @@ export interface Creative {
   templateId: string | null;
   type: 'carousel' | 'single' | 'story' | 'ad';
   platform: string;
+  format?: 'square' | 'portrait' | 'story';
+  canvasWidth?: number;
+  canvasHeight?: number;
+  layoutMode?: 'minimalist' | 'profile' | 'editorial' | 'bold' | 'split' | 'cinematic' | 'twitter';
+  profileConfig?: ProfileConfig | null;
+  fontCombination?: FontCombination;
+  accentColor?: string;
+  instagramHandle?: string;
   slides: Slide[];
   exportUrls: string[];
   status: 'draft' | 'ready' | 'published';
   createdAt: string;
   updatedAt: string;
+}
+
+export interface GenerateCarouselDto {
+  clientId: string;
+  prompt: string;
+  referenceImageUrl?: string;
+  slidesCount: number;
+  imageMode: 'background' | 'grid' | 'both';
+  imageStyleHint?: string;
+  layoutMode: 'minimalist' | 'profile' | 'editorial' | 'bold' | 'split' | 'cinematic' | 'twitter';
+  format: 'square' | 'portrait' | 'story';
+  instagramHandle: string;
+  fontCombination: FontCombination;
+  accentColor: string;
+  generateImages: boolean;
+  textDepth?: 'concise' | 'detailed';
+}
+
+export interface GenerateCarouselResponse {
+  job_id: string;
+  creativeId?: string;
+  message: string;
+}
+
+export interface GenerateCarouselJobStatus {
+  jobId: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  stage: string;
+  progress: number;
+  creativeId?: string;
+  error?: string;
+}
+
+export interface RefineSlideResponse {
+  index: number;
+  textLayout: SlideTextLayout;
+}
+
+export interface GenerateCaptionResponse {
+  caption: string;
+  hashtags: string[];
 }
 
 export interface EditorState {

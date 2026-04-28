@@ -1,5 +1,5 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { apiGet } from "@/lib/api";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 
 export type LibraryPostStatus = "draft" | "ready_review" | "approved" | "rejected" | "published";
 export type LibraryPeriod = "all" | "today" | "week" | "month";
@@ -14,7 +14,23 @@ export interface LibraryPostItem {
   generated_by: string | null;
   created_at: string;
   updated_at: string;
+  status_updated_at?: string | null;
+  status_updated_by?: string | null;
   creative_id: string | null;
+}
+
+export interface PostStatusHistoryItem {
+  id: string;
+  post_id: string;
+  from_status: LibraryPostStatus | null;
+  to_status: LibraryPostStatus;
+  changed_by: string | null;
+  changed_at: string;
+}
+
+export interface LibraryPostDetail extends LibraryPostItem {
+  channels: string[];
+  history: PostStatusHistoryItem[];
 }
 
 interface PostsLibraryResponse {
@@ -30,6 +46,15 @@ export interface LibraryFilters {
   status: string;
   period: LibraryPeriod;
   search: string;
+}
+
+interface UpdatePostStatusPayload {
+  status: LibraryPostStatus;
+}
+
+interface EnsurePostCreativeResponse {
+  creativeId: string;
+  created: boolean;
 }
 
 function buildPostsQuery(filters: LibraryFilters, page: number, limit: number): string {
@@ -56,6 +81,39 @@ export function usePostsLibrary(filters: LibraryFilters, limit = 25) {
     },
     getNextPageParam: (lastPage) => {
       return lastPage.has_more ? lastPage.page + 1 : undefined;
+    },
+  });
+}
+
+export function usePostDetail(postId: string | null) {
+  return useQuery({
+    queryKey: ["post-detail", postId],
+    queryFn: () => apiGet<LibraryPostDetail>(`/api/posts/${postId}`),
+    enabled: !!postId,
+  });
+}
+
+export function useUpdatePostStatus() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ postId, status }: { postId: string; status: LibraryPostStatus }) => {
+      return apiPut<LibraryPostDetail>(`/api/posts/${postId}/status`, { status } as UpdatePostStatusPayload);
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["posts-library"] });
+      queryClient.setQueryData(["post-detail", data.id], data);
+    },
+  });
+}
+
+export function useEnsurePostCreative() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (postId: string) => apiPost<EnsurePostCreativeResponse>(`/api/posts/${postId}/creative`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["posts-library"] });
     },
   });
 }

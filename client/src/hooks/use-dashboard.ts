@@ -1,5 +1,5 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet } from "@/lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiGet, apiPost } from "@/lib/api";
 import { useEffect } from "react";
 import { useAuth } from "./use-auth";
 import type { JobEvent } from "../../../server/websocket/job-events";
@@ -46,6 +46,16 @@ export function useDashboard() {
     },
     refetchInterval: REFETCH_INTERVAL_MS,
     staleTime: 10_000,
+  });
+}
+
+export function useCancelJob() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (jobId: string) => apiPost(`/api/jobs/${jobId}/cancel`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY });
+    },
   });
 }
 

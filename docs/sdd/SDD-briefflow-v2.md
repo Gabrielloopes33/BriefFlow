@@ -1,12 +1,12 @@
 # Software Design Document — BriefFlow v2
 # Geração de Conteúdo com Agentes Especializados + Editor Visual
 
-**Versão:** 2.0  
-**Data:** 2026-04-22  
-**Status:** Aprovado para execução  
+**Versão:** 2.1  
+**Data:** 2026-04-23  
+**Status:** Em execução (Sprint 8 concluida)  
 **Owner:** @pm (Morgan)  
 **Arquitetura:** @architect (Aria)  
-**Próxima Sprint:** 5
+**Próxima Sprint:** 9
 
 ---
 
@@ -423,6 +423,33 @@ Retorna: slides[] = [{ headline, body, cta, slideIndex }]
 - S8-02: Wizard de onboarding de clientes (4 etapas)
 - S8-03: Biblioteca de conteúdo (histórico + filtros)
 - S8-04: Fluxo de aprovação (draft → review → aprovado)
+
+#### Status de Execução (atualizado em 2026-04-23)
+- S8-01 concluida: Studio validado.
+- S8-02 concluida: Client Wizard em 4 etapas validado.
+- S8-03 concluida: Biblioteca com historico/filtros entregue.
+- S8-04 concluida: fluxo de status implementado e validado com transicoes permitidas/bloqueadas.
+
+Entregas tecnicas de S8-04:
+- Backend:
+  - Endpoint dedicado de transicao: `PUT /api/posts/:postId/status` com validacao de maquina de estados.
+  - Bloqueio de mudanca de status no endpoint generico `PUT /api/posts/:postId`.
+  - Auditoria de status com `status_updated_at`, `status_updated_by` e timeline em `post_status_history`.
+- Frontend:
+  - Acoes contextuais por status no modal de detalhe.
+  - Badge de status compartilhada entre card e detalhe.
+  - Consulta de detalhe com timeline de historico e mutacao de status.
+
+Alinhamento de banco executado para normalizar a biblioteca:
+- Migrations aplicadas/reaplicadas no ambiente de desenvolvimento: 005, 006, 007, 008, 009, 010, 011 e 012.
+- Impacto direto: criacao de `creatives` e `creative_templates` (Sprint 7), eliminando erro de listagem da biblioteca por relacao ausente.
+
+Validacao funcional registrada:
+- API de listagem da biblioteca voltou a responder com sucesso (`GET /api/posts` com tenant_id).
+- Fluxo de aprovacao validado com:
+  - transicao valida: `draft -> ready_review`;
+  - transicao invalida bloqueada: `ready_review -> published`;
+  - historico retornado em detalhe do post.
 
 ### Sprint 9 — Analytics + Meta API
 - S9-01: Meta API OAuth completo + refresh de token

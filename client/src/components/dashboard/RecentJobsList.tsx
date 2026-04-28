@@ -1,8 +1,9 @@
-import { CheckCircle2, XCircle, Loader2, ExternalLink } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, ExternalLink, X } from "lucide-react";
 import { Link } from "wouter";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import type { DashboardJob } from "@/hooks/use-dashboard";
+import { useCancelJob } from "@/hooks/use-dashboard";
 
 interface RecentJobsListProps {
   jobs: DashboardJob[];
@@ -45,6 +46,8 @@ function JobStatusText({ status, stage }: { status: string; stage: string }) {
 }
 
 export function RecentJobsList({ jobs }: RecentJobsListProps) {
+  const cancelJob = useCancelJob();
+
   if (jobs.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground text-sm">
@@ -73,6 +76,17 @@ export function RecentJobsList({ jobs }: RecentJobsListProps) {
               </span>
             </div>
           </div>
+
+          {job.status === "processing" && (
+            <button
+              onClick={() => cancelJob.mutate(job.id)}
+              disabled={cancelJob.isPending}
+              title="Cancelar geração"
+              className="shrink-0 p-1.5 rounded-md hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors disabled:opacity-50"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
 
           {job.result_post_id && (
             <Link

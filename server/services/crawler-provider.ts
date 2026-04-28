@@ -39,6 +39,7 @@ export interface CrawlerProvider {
 
 import { InternalCrawlerProvider } from "./internal-crawler-provider";
 import { SocialApiProvider } from "./social-api-provider";
+import { ApifySocialProvider } from "./apify-social-provider";
 
 /** Seleciona provider baseado no tipo de fonte e configuração */
 export function selectProvider(sourceType: string): CrawlerProvider {
@@ -46,6 +47,10 @@ export function selectProvider(sourceType: string): CrawlerProvider {
   const normalized = sourceType.toLowerCase();
 
   if (socialTypes.includes(normalized)) {
+    // Preferir Apify se token estiver configurado
+    if (process.env.APIFY_API_TOKEN) {
+      return new ApifySocialProvider();
+    }
     return new SocialApiProvider();
   }
 

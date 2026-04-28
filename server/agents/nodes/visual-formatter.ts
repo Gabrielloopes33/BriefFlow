@@ -87,8 +87,8 @@ async function createCreative(
       : createSimpleSlides(slides);
 
     const { rows } = await pool.query(
-      `INSERT INTO creatives (tenant_id, client_id, type, platform, slides, status, template_id)
-       VALUES ($1, $2, $3, $4, $5, 'draft', $6)
+      `INSERT INTO creatives (tenant_id, client_id, type, platform, format, canvas_width, canvas_height, slides, status, template_id)
+       VALUES ($1, $2, $3, $4, 'portrait', 1080, 1350, $5, 'draft', $6)
        RETURNING id`,
       [
         state.tenantId,
@@ -287,21 +287,39 @@ function structureSlidesFallback(draft: AgentState['draft']): SlideContent[] {
 
 /**
  * Nó visual-formatter principal
+ * 
+ * Modos:
+ * - config.mode = 'database' (padrão): cria registro em creatives table
+ * - config.mode = 'studio': retorna slides array no estado sem persistir
  */
 export async function visualFormatterNode(
   state: AgentState,
   config?: Record<string, any>
 ): Promise<Partial<AgentState>> {
   const startTime = Date.now();
-  const traceId = state.metadata?.traceId;
+  const mode = config?.mode || 'database';
 
-  console.log(`[visual-formatter] Starting for job ${state.jobId}`);
+  console.log(`[visual-formatter] Starting for job ${state.jobId}, mode=${mode}`);
 
   try {
+    // Se já tem slides prontos (ex: do carousel-writer), usa diretamente
+    if (state.slides && state.slides.length > 0 && mode === 'studio') {
+      console.log(`[visual-formatter] Using pre-generated slides (${state.slides.length}) in studio mode`);
+      const latency = Date.now() - startTime;
+      return {
+        slides: state.slides,
+        metadata: {
+          ...state.metadata,
+          totalLatency: state.metadata.totalLatency + latency,
+          models: [...state.metadata.models, 'visual-formatter'],
+        },
+      };
+    }
+
     // Verifica se tem draft
     if (!state.draft?.title && !state.draft?.content) {
       console.log('[visual-formatter] No draft available, skipping');
-      return { creativeId: undefined };
+      return mode === 'studio' ? { slides: [] } : { creativeId: undefined };
     }
 
     // 1. Sugere template
@@ -322,7 +340,24 @@ export async function visualFormatterNode(
       slideContents = structureSlidesFallback(state.draft);
     }
 
-    // 4. Cria registro em creatives
+    // Modo studio: retorna slides diretamente sem persistir no banco
+    if (mode === 'studio') {
+      const studioSlides = slideContents.map((s) => ({
+        title: s.headline,
+        subtitle: s.body,
+      }));
+      const latency = Date.now() - startTime;
+      return {
+        slides: studioSlides,
+        metadata: {
+          ...state.metadata,
+          totalLatency: state.metadata.totalLatency + latency,
+          models: [...state.metadata.models, 'visual-formatter'],
+        },
+      };
+    }
+
+    // Modo database (padrão): cria registro em creatives
     const creativeId = await createCreative(state, slideContents, templateId);
 
     if (!creativeId) {
@@ -343,13 +378,21 @@ export async function visualFormatterNode(
     };
   } catch (error: any) {
     console.error('[visual-formatter] Error:', error.message);
-    // Não bloqueia o job — retorna sem creativeId
-    return {
-      creativeId: undefined,
-      errors: [
-        ...state.errors,
-        { node: 'visual-formatter', message: error.message, timestamp: new Date().toISOString() },
-      ],
-    };
+    // Não bloqueia o job
+    return mode === 'studio'
+      ? {
+          slides: state.slides || [],
+          errors: [
+            ...state.errors,
+            { node: 'visual-formatter', message: error.message, timestamp: new Date().toISOString() },
+          ],
+        }
+      : {
+          creativeId: undefined,
+          errors: [
+            ...state.errors,
+            { node: 'visual-formatter', message: error.message, timestamp: new Date().toISOString() },
+          ],
+        };
   }
 }

@@ -4,6 +4,8 @@
  */
 
 import { Rect } from 'react-konva';
+import { Image } from 'react-konva';
+import { useEffect, useMemo, useState } from 'react';
 import type { SlideBackground } from '@/lib/creative-editor-types';
 
 interface BackgroundLayerProps {
@@ -38,6 +40,36 @@ function parseGradient(value: string): { colors: string[]; stops: number[] } | n
 }
 
 export function BackgroundLayer({ background, width, height }: BackgroundLayerProps) {
+  const [imageObj, setImageObj] = useState<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (background.type !== 'image' || !background.value) {
+      setImageObj(null);
+      return;
+    }
+
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    img.src = background.value;
+    img.onload = () => setImageObj(img);
+    img.onerror = () => setImageObj(null);
+  }, [background.type, background.value]);
+
+  const imageTransform = useMemo(() => {
+    const zoom = Math.max(100, background.imageZoom ?? 100) / 100;
+    const drawWidth = width * zoom;
+    const drawHeight = height * zoom;
+    const xPct = Math.max(0, Math.min(100, background.imagePositionX ?? 50)) / 100;
+    const yPct = Math.max(0, Math.min(100, background.imagePositionY ?? 50)) / 100;
+
+    return {
+      x: (width - drawWidth) * xPct,
+      y: (height - drawHeight) * yPct,
+      width: drawWidth,
+      height: drawHeight,
+    };
+  }, [background.imagePositionX, background.imagePositionY, background.imageZoom, width, height]);
+
   if (background.type === 'color') {
     return (
       <Rect
@@ -82,8 +114,19 @@ export function BackgroundLayer({ background, width, height }: BackgroundLayerPr
   }
 
   if (background.type === 'image') {
-    // Para imagem de fundo, usamos um retângulo com fillPatternImage
-    // Simplificado: retorna um rect cinza escuro como placeholder
+    if (imageObj) {
+      return (
+        <Image
+          x={imageTransform.x}
+          y={imageTransform.y}
+          width={imageTransform.width}
+          height={imageTransform.height}
+          image={imageObj}
+          listening={false}
+        />
+      );
+    }
+
     return (
       <Rect
         x={0}

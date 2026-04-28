@@ -4,13 +4,30 @@ import { pool, getClientForUser } from "./pg-pool";
 import { startPostWorker } from "./services/post-worker";
 import { CrawlerClient } from "./services/crawler-client";
 import { createLLMClient, getDefaultModel } from "./services/llm-provider";
+import {
+  generateCaptionFromSlides,
+  generateSlideImage,
+  generateSlidesCopy,
+  generateSlidesWithAgents,
+  refineSlideCopy,
+} from "./services/creative-ai";
 import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerAnalyticsRoutes } from "./routes/analytics";
+import { broadcastJobEvent } from "./websocket/job-broadcaster";
+import { buildSlideFromTemplate } from "./slide-templates";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  const STATUS_TRANSITIONS: Record<string, string[]> = {
+    draft: ["ready_review"],
+    ready_review: ["approved", "draft"],
+    approved: ["published", "ready_review"],
+    rejected: ["draft"],
+    published: [],
+  };
+
   function resolveTenantId(req: any): string | null {
     const headerTenant = req.headers?.["x-tenant-id"];
     const queryTenant = req.query?.tenant_id;
@@ -97,16 +114,71 @@ export async function registerRoutes(
       const { name, description, niche, target_audience, tone_of_voice, content_pillars, forbidden_words, website, preferred_format, example_posts } = req.body;
       const client = await getClientForUser(req.userId);
       try {
+        // Build dynamic UPDATE clause
+        const setClauses: string[] = [];
+        const params: any[] = [];
+
+        if (name !== undefined) {
+          params.push(name);
+          setClauses.push(`name=$${params.length}`);
+        }
+        if (description !== undefined) {
+          params.push(description);
+          setClauses.push(`description=$${params.length}`);
+        }
+        if (niche !== undefined) {
+          params.push(niche);
+          setClauses.push(`niche=$${params.length}`);
+        }
+        if (target_audience !== undefined) {
+          params.push(target_audience);
+          setClauses.push(`target_audience=$${params.length}`);
+        }
+        if (tone_of_voice !== undefined) {
+          params.push(tone_of_voice ?? null);
+          setClauses.push(`tone_of_voice=$${params.length}`);
+        }
+        if (content_pillars !== undefined) {
+          params.push(content_pillars ?? []);
+          setClauses.push(`content_pillars=$${params.length}`);
+        }
+        if (forbidden_words !== undefined) {
+          params.push(forbidden_words ?? []);
+          setClauses.push(`forbidden_words=$${params.length}`);
+        }
+        if (website !== undefined) {
+          params.push(website ?? null);
+          setClauses.push(`website=$${params.length}`);
+        }
+        if (preferred_format !== undefined) {
+          params.push(preferred_format ?? null);
+          setClauses.push(`preferred_format=$${params.length}`);
+        }
+        if (example_posts !== undefined) {
+          params.push(example_posts ? JSON.stringify(example_posts) : '[]');
+          setClauses.push(`example_posts=$${params.length}`);
+        }
+
+        setClauses.push('updated_at=now()');
+
+        if (setClauses.length === 1 && Object.keys(req.body).length === 0) {
+          // Empty body, just return the current client
+          const { rows } = await client.query(
+            `SELECT * FROM clients WHERE id=$1 AND tenant_id=$2`,
+            [req.params.id, tenantId]
+          );
+          if (!rows[0]) return res.status(404).json({ message: 'Client not found' });
+          return res.json(rows[0]);
+        }
+
+        // Add WHERE parameters
+        params.push(req.params.id);
+        params.push(tenantId);
+
         const { rows } = await client.query(
-          `UPDATE clients SET name=$1, description=$2, niche=$3, target_audience=$4,
-           tone_of_voice=$7, content_pillars=$8, forbidden_words=$9,
-           website=$10, preferred_format=$11, example_posts=$12,
-           updated_at=now()
-           WHERE id=$5 AND tenant_id=$6 RETURNING *`,
-          [name, description, niche, target_audience, req.params.id, tenantId,
-           tone_of_voice ?? null, content_pillars ?? [], forbidden_words ?? [],
-           website ?? null, preferred_format ?? null,
-           example_posts ? JSON.stringify(example_posts) : '[]']
+          `UPDATE clients SET ${setClauses.join(', ')}
+           WHERE id=$${params.length - 1} AND tenant_id=$${params.length} RETURNING *`,
+          params
         );
         if (!rows[0]) return res.status(404).json({ message: 'Client not found' });
         res.json(rows[0]);
@@ -969,7 +1041,7 @@ export async function registerRoutes(
 
         const { rows: jobRows } = await pgClient.query(
           `INSERT INTO jobs (tenant_id, client_id, user_id, status, stage, progress, attempt, max_attempts, idempotency_key, payload)
-           VALUES ($1,$2,$3,'queued','validating_input',0,0,3,$4,$5) RETURNING id, status, created_at`,
+           VALUES ($1,$2,$3,'queued','validating_input',0,1,3,$4,$5) RETURNING id, status, created_at`,
           [tenantId, clientId, req.userId, idempotency_key, JSON.stringify(payload)]
         );
 
@@ -1021,6 +1093,40 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Error fetching job:", error);
       res.status(500).json({ message: error.message || "Failed to fetch job" });
+    }
+  });
+
+  // Cancel a running job
+  app.post("/api/jobs/:jobId/cancel", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        // First verify the job belongs to this tenant
+        const { rows: existing } = await pgClient.query(
+          `SELECT id, status FROM jobs WHERE id=$1 AND tenant_id=$2`,
+          [req.params.jobId, tenantId]
+        );
+        if (!existing[0]) {
+          console.warn(`[cancel-job] job ${req.params.jobId} not found for tenant ${tenantId}`);
+          return res.status(404).json({ message: "Job not found" });
+        }
+        const currentStatus = existing[0].status;
+        console.log(`[cancel-job] canceling job ${req.params.jobId} (current status: ${currentStatus})`);
+        if (currentStatus === 'completed' || currentStatus === 'failed') {
+          return res.status(409).json({ message: "Job already finished", status: currentStatus });
+        }
+        await pgClient.query(
+          `UPDATE jobs SET status='failed', updated_at=NOW() WHERE id=$1`,
+          [req.params.jobId]
+        );
+        res.json({ ok: true });
+      } finally { pgClient.release(); }
+    } catch (error: any) {
+      console.error("Error canceling job:", error);
+      res.status(500).json({ message: error.message || "Failed to cancel job" });
     }
   });
 
@@ -1112,6 +1218,8 @@ export async function registerRoutes(
             p.generated_by,
             p.created_at,
             p.updated_at,
+            p.status_updated_at,
+            p.status_updated_by,
             c.name AS client_name,
             cr.id AS creative_id
           FROM posts p
@@ -1148,16 +1256,122 @@ export async function registerRoutes(
       const pgClient = await getClientForUser(req.userId);
       try {
         const { rows } = await pgClient.query(
-          `SELECT id, client_id, title, content, channels, status, generated_by, created_at, updated_at
+          `SELECT id, client_id, title, content, channels, status, generated_by,
+                  created_at, updated_at, status_updated_at, status_updated_by
            FROM posts WHERE id=$1 AND tenant_id=$2`,
           [req.params.postId, tenantId]
         );
         if (!rows[0]) return res.status(404).json({ message: "Post not found" });
-        res.json(rows[0]);
+
+        const historyResult = await pgClient.query(
+          `SELECT id, post_id, from_status, to_status, changed_by, changed_at
+           FROM post_status_history
+           WHERE post_id = $1 AND tenant_id = $2
+           ORDER BY changed_at DESC`,
+          [req.params.postId, tenantId]
+        );
+
+        res.json({
+          ...rows[0],
+          history: historyResult.rows,
+        });
       } finally { pgClient.release(); }
     } catch (error: any) {
       console.error("Error fetching post:", error);
       res.status(500).json({ message: error.message || "Failed to fetch post" });
+    }
+  });
+
+  // Ensure a visual creative exists for a post and return its id (without re-running AI generation)
+  app.post('/api/posts/:postId/creative', async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const postId = req.params.postId;
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const existingCreative = await pgClient.query(
+          `SELECT id
+           FROM creatives
+           WHERE tenant_id = $1 AND post_id = $2
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [tenantId, postId]
+        );
+
+        if (existingCreative.rows[0]?.id) {
+          return res.json({ creativeId: existingCreative.rows[0].id, created: false });
+        }
+
+        const postResult = await pgClient.query(
+          `SELECT id, client_id, title, content
+           FROM posts
+           WHERE id = $1 AND tenant_id = $2`,
+          [postId, tenantId]
+        );
+
+        const post = postResult.rows[0];
+        if (!post) {
+          return res.status(404).json({ message: 'Post not found' });
+        }
+
+        const contentText = String(post.content || '').trim();
+        const normalized = contentText.replace(/\r/g, '');
+        const matches = [...normalized.matchAll(/(?:^|\n)Slide\s*(\d+)\s*:\s*([^\n]+)\n?([^\n]*)/gim)];
+
+        const parsedSlides = matches
+          .map((m) => ({
+            title: String(m[2] || '').trim(),
+            subtitle: String(m[3] || '').trim(),
+          }))
+          .filter((s) => s.title.length > 0);
+
+        const baseTitle = String(post.title || 'Novo conteúdo').trim() || 'Novo conteúdo';
+        const fallbackSubtitle = contentText
+          ? contentText.slice(0, 220)
+          : 'Conteúdo importado da biblioteca';
+
+        const slideCopy = (parsedSlides.length > 0 ? parsedSlides : [{ title: baseTitle, subtitle: fallbackSubtitle }]).slice(0, 10);
+
+        const slides = slideCopy.map((copy, index) =>
+          buildCreativeSlide({
+            index,
+            title: copy.title,
+            subtitle: copy.subtitle,
+            accentColor: '#3B82F6',
+            layoutMode: 'minimalist',
+            imageMode: 'both',
+            imageUrl: undefined,
+            fontCombination: DEFAULT_FONT_COMBINATION,
+          })
+        );
+
+        const insertResult = await pgClient.query(
+          `INSERT INTO creatives (
+             tenant_id, client_id, post_id, type, platform, format, canvas_width, canvas_height,
+             layout_mode, font_combination, accent_color, instagram_handle, slides, status
+           )
+           VALUES ($1, $2, $3, 'carousel', 'instagram', 'portrait', 1080, 1350, 'minimalist', $4, $5, $6, $7, 'draft')
+           RETURNING id`,
+          [
+            tenantId,
+            post.client_id,
+            post.id,
+            JSON.stringify(DEFAULT_FONT_COMBINATION),
+            '#3B82F6',
+            '',
+            JSON.stringify(slides),
+          ]
+        );
+
+        return res.json({ creativeId: insertResult.rows[0].id, created: true });
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error('Error ensuring post creative:', error);
+      return res.status(500).json({ message: error.message || 'Failed to create creative from post' });
     }
   });
 
@@ -1168,12 +1382,17 @@ export async function registerRoutes(
       if (!tenantId) return;
 
       const { title, content, status } = req.body;
+      if (status !== undefined) {
+        return res.status(400).json({
+          message: "Use PUT /api/posts/:postId/status para alterar status com validação de fluxo.",
+        });
+      }
       const pgClient = await getClientForUser(req.userId);
       try {
         const { rows } = await pgClient.query(
-          `UPDATE posts SET title=COALESCE($1,title), content=COALESCE($2,content), status=COALESCE($3,status), updated_at=NOW()
-           WHERE id=$4 AND tenant_id=$5 RETURNING *`,
-          [title, content, status, req.params.postId, tenantId]
+          `UPDATE posts SET title=COALESCE($1,title), content=COALESCE($2,content), updated_at=NOW()
+           WHERE id=$3 AND tenant_id=$4 RETURNING *`,
+          [title, content, req.params.postId, tenantId]
         );
         if (!rows[0]) return res.status(404).json({ message: "Post not found" });
         res.json(rows[0]);
@@ -1181,6 +1400,92 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Error updating post:", error);
       res.status(500).json({ message: error.message || "Failed to update post" });
+    }
+  });
+
+  // Update post status with transition validation
+  app.put("/api/posts/:postId/status", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const { status: nextStatus } = req.body || {};
+      if (typeof nextStatus !== "string") {
+        return res.status(400).json({ message: "Field 'status' is required." });
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(STATUS_TRANSITIONS, nextStatus)) {
+        return res.status(400).json({ message: `Invalid status '${nextStatus}'.` });
+      }
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        await pgClient.query("BEGIN");
+
+        const currentPostResult = await pgClient.query(
+          `SELECT id, client_id, title, content, channels, status, generated_by,
+                  created_at, updated_at, status_updated_at, status_updated_by
+           FROM posts WHERE id=$1 AND tenant_id=$2 FOR UPDATE`,
+          [req.params.postId, tenantId]
+        );
+
+        const currentPost = currentPostResult.rows[0];
+        if (!currentPost) {
+          await pgClient.query("ROLLBACK");
+          return res.status(404).json({ message: "Post not found" });
+        }
+
+        const currentStatus = String(currentPost.status);
+        const allowedTransitions = STATUS_TRANSITIONS[currentStatus] || [];
+
+        if (!allowedTransitions.includes(nextStatus)) {
+          await pgClient.query("ROLLBACK");
+          return res.status(400).json({
+            message: `Invalid transition: ${currentStatus} -> ${nextStatus}. Allowed: ${allowedTransitions.join(", ") || "none"}.`,
+          });
+        }
+
+        const updateResult = await pgClient.query(
+          `UPDATE posts
+           SET status = $1,
+               status_updated_at = NOW(),
+               status_updated_by = $2,
+               updated_at = NOW()
+           WHERE id = $3 AND tenant_id = $4
+           RETURNING id, client_id, title, content, channels, status, generated_by,
+                     created_at, updated_at, status_updated_at, status_updated_by`,
+          [nextStatus, req.userId, req.params.postId, tenantId]
+        );
+
+        await pgClient.query(
+          `INSERT INTO post_status_history (tenant_id, post_id, from_status, to_status, changed_by)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [tenantId, req.params.postId, currentStatus, nextStatus, req.userId]
+        );
+
+        const historyResult = await pgClient.query(
+          `SELECT id, post_id, from_status, to_status, changed_by, changed_at
+           FROM post_status_history
+           WHERE post_id = $1 AND tenant_id = $2
+           ORDER BY changed_at DESC`,
+          [req.params.postId, tenantId]
+        );
+
+        await pgClient.query("COMMIT");
+
+        return res.json({
+          ...updateResult.rows[0],
+          history: historyResult.rows,
+        });
+      } catch (error) {
+        await pgClient.query("ROLLBACK");
+        throw error;
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error updating post status:", error);
+      res.status(500).json({ message: error.message || "Failed to update post status" });
     }
   });
 
@@ -1320,7 +1625,7 @@ export async function registerRoutes(
         const { rows } = await pgClient.query(
           `INSERT INTO agents (tenant_id, name, description, role, system_prompt, model, temperature, max_tokens, tools, config)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-          [tenantId, name, description || '', role, system_prompt, model || 'gpt-4o-mini', temperature ?? 0.7, max_tokens || 2048, JSON.stringify(tools || []), JSON.stringify(config || {})]
+          [tenantId, name, description || '', role, system_prompt, model || getDefaultModel(), temperature ?? 0.7, max_tokens || 2048, JSON.stringify(tools || []), JSON.stringify(config || {})]
         );
         res.status(201).json(rows[0]);
       } finally { pgClient.release(); }
@@ -1649,16 +1954,92 @@ export async function registerRoutes(
 
       const pgClient = await getClientForUser(req.userId);
       try {
-        const { rows } = await pgClient.query(
-          `SELECT id, tenant_id as "tenantId", name, type, platform,
+        const selectSql = `SELECT id, tenant_id as "tenantId", name, type, platform,
            slides_count as "slidesCount", structure, thumbnail_url as "thumbnailUrl",
+           format, canvas_width as "canvasWidth", canvas_height as "canvasHeight",
            is_global as "isGlobal", is_active as "isActive", created_at as "createdAt"
            FROM creative_templates
-           WHERE is_global = true OR tenant_id = $1
+           WHERE (is_global = true OR tenant_id = $1)
            AND is_active = true
-           ORDER BY is_global DESC, name ASC`,
-          [tenantId]
-        );
+           ORDER BY is_global DESC, name ASC`;
+
+        let { rows } = await pgClient.query(selectSql, [tenantId]);
+
+        if (rows.length === 0) {
+          const defaultStructure = {
+            width: 1080,
+            height: 1080,
+            slides: [
+              {
+                id: 'slide-1',
+                index: 0,
+                background: {
+                  type: 'gradient',
+                  value: 'linear-gradient(135deg, #0f172a 0%, #1d4ed8 100%)',
+                },
+                layers: [
+                  {
+                    id: 'layer-headline',
+                    type: 'text',
+                    x: 80,
+                    y: 240,
+                    width: 920,
+                    height: 220,
+                    text: '{{headline}}',
+                    fontSize: 62,
+                    fontWeight: 'bold',
+                    color: '#ffffff',
+                    align: 'center',
+                    editable: true,
+                  },
+                  {
+                    id: 'layer-body',
+                    type: 'text',
+                    x: 120,
+                    y: 500,
+                    width: 840,
+                    height: 180,
+                    text: '{{body}}',
+                    fontSize: 28,
+                    fontWeight: 'normal',
+                    color: '#dbeafe',
+                    align: 'center',
+                    editable: true,
+                  },
+                  {
+                    id: 'layer-handle',
+                    type: 'text',
+                    x: 80,
+                    y: 920,
+                    width: 920,
+                    height: 50,
+                    text: '{{client_handle}}',
+                    fontSize: 20,
+                    fontWeight: 'normal',
+                    color: '#bfdbfe',
+                    align: 'center',
+                    editable: false,
+                  },
+                ],
+              },
+            ],
+          };
+
+          await pgClient.query(
+            `INSERT INTO creative_templates (
+               tenant_id, name, type, platform, slides_count, structure, thumbnail_url, is_global, is_active
+             )
+             SELECT NULL, 'Post Unico de Impacto', 'single', 'universal', 1, $1::jsonb, NULL, true, true
+             WHERE NOT EXISTS (
+               SELECT 1 FROM creative_templates WHERE is_global = true AND is_active = true
+             )`,
+            [JSON.stringify(defaultStructure)]
+          );
+
+          const refreshed = await pgClient.query(selectSql, [tenantId]);
+          rows = refreshed.rows;
+        }
+
         res.json(rows);
       } finally { pgClient.release(); }
     } catch (error: any) {
@@ -1671,6 +2052,116 @@ export async function registerRoutes(
   // CREATIVES
   // ============================================================
 
+  const DEFAULT_FONT_COMBINATION = { title: 'Space', body: 'Inter' };
+
+  function clampSlideCount(input: unknown): number {
+    const parsed = Number(input);
+    if (!Number.isFinite(parsed)) return 6;
+    return Math.max(1, Math.min(10, Math.floor(parsed)));
+  }
+
+  function buildCreativeSlide(params: {
+    index: number;
+    title: string;
+    subtitle: string;
+    accentColor: string;
+    layoutMode: 'minimalist' | 'profile' | 'editorial' | 'bold' | 'split' | 'cinematic' | 'twitter';
+    imageMode: 'background' | 'grid' | 'both';
+    imageUrl?: string;
+    imagePrompt?: string;
+    fontCombination?: { title: string; body: string };
+    canvasHeight?: number;
+  }) {
+    const theme = params.index % 2 === 0 ? 'dark' : 'light';
+    const templateResult = buildSlideFromTemplate({
+      index: params.index,
+      title: params.title,
+      subtitle: params.subtitle,
+      accentColor: params.accentColor,
+      layoutMode: params.layoutMode,
+      imageMode: params.imageMode,
+      imageUrl: params.imageUrl,
+      fontCombination: params.fontCombination || DEFAULT_FONT_COMBINATION,
+      canvasHeight: params.canvasHeight,
+    });
+
+    return {
+      id: `slide-${params.index + 1}`,
+      index: params.index,
+      theme,
+      background: templateResult.background,
+      overlay: templateResult.overlay,
+      imageGrid: templateResult.imageGrid,
+      textLayout: templateResult.textLayout,
+      typography: templateResult.typography,
+      profileBadge: templateResult.profileBadge,
+      ctaButton: templateResult.ctaButton,
+      layers: templateResult.layers,
+      imagePrompt: params.imagePrompt,
+    };
+  }
+
+  type CreativeGenerationJobStatus = 'queued' | 'processing' | 'completed' | 'failed';
+
+  interface CreativeGenerationJob {
+    jobId: string;
+    tenantId: string;
+    userId: string;
+    status: CreativeGenerationJobStatus;
+    stage: string;
+    progress: number;
+    creativeId?: string;
+    error?: string;
+    createdAt: number;
+    updatedAt: number;
+  }
+
+  const creativeGenerationJobs = new Map<string, CreativeGenerationJob>();
+
+  function updateCreativeGenerationJob(
+    jobId: string,
+    updates: Partial<Pick<CreativeGenerationJob, 'status' | 'stage' | 'progress' | 'creativeId' | 'error'>>
+  ) {
+    const current = creativeGenerationJobs.get(jobId);
+    if (!current) return;
+
+    const next: CreativeGenerationJob = {
+      ...current,
+      ...updates,
+      updatedAt: Date.now(),
+    };
+
+    creativeGenerationJobs.set(jobId, next);
+
+    if (next.status === 'processing') {
+      broadcastJobEvent(next.userId, {
+        type: 'job:stage',
+        jobId,
+        stage: next.stage,
+        progress: next.progress,
+        tenantId: next.tenantId,
+      });
+    }
+
+    if (next.status === 'completed' && next.creativeId) {
+      broadcastJobEvent(next.userId, {
+        type: 'job:complete',
+        jobId,
+        postId: next.creativeId,
+        tenantId: next.tenantId,
+      });
+    }
+
+    if (next.status === 'failed' && next.error) {
+      broadcastJobEvent(next.userId, {
+        type: 'job:failed',
+        jobId,
+        error: next.error,
+        tenantId: next.tenantId,
+      });
+    }
+  }
+
   app.get("/api/creatives", async (req, res) => {
     try {
       const tenantId = requireTenantId(req, res);
@@ -1680,7 +2171,11 @@ export async function registerRoutes(
       const pgClient = await getClientForUser(req.userId);
       try {
         let query = `SELECT id, tenant_id as "tenantId", client_id as "clientId", post_id as "postId",
-          template_id as "templateId", type, platform, slides, export_urls as "exportUrls",
+          template_id as "templateId", type, platform,
+          format, canvas_width as "canvasWidth", canvas_height as "canvasHeight",
+          layout_mode as "layoutMode", font_combination as "fontCombination",
+          accent_color as "accentColor", instagram_handle as "instagramHandle",
+          profile_config as "profileConfig", slides, export_urls as "exportUrls",
           status, created_at as "createdAt", updated_at as "updatedAt"
           FROM creatives WHERE tenant_id = $1`;
         const params: string[] = [tenantId];
@@ -1709,7 +2204,11 @@ export async function registerRoutes(
       try {
         const { rows } = await pgClient.query(
           `SELECT id, tenant_id as "tenantId", client_id as "clientId", post_id as "postId",
-           template_id as "templateId", type, platform, slides, export_urls as "exportUrls",
+           template_id as "templateId", type, platform,
+           format, canvas_width as "canvasWidth", canvas_height as "canvasHeight",
+           layout_mode as "layoutMode", font_combination as "fontCombination",
+           accent_color as "accentColor", instagram_handle as "instagramHandle",
+           profile_config as "profileConfig", slides, export_urls as "exportUrls",
            status, created_at as "createdAt", updated_at as "updatedAt"
            FROM creatives WHERE id = $1 AND tenant_id = $2`,
           [req.params.id, tenantId]
@@ -1728,17 +2227,66 @@ export async function registerRoutes(
       const tenantId = requireTenantId(req, res);
       if (!tenantId) return;
 
-      const { client_id, post_id, template_id, type, platform, slides } = req.body;
+      const {
+        client_id,
+        post_id,
+        template_id,
+        type,
+        platform,
+        format,
+        slides_count,
+        slides,
+        layoutMode,
+        fontCombination,
+        accentColor,
+        instagramHandle,
+        profileConfig,
+      } = req.body;
+
+      // Determinar dimensões do canvas baseado no formato
+      let canvasWidth = 1080;
+      let canvasHeight = 1080;
+      const safeFormat = format || 'square';
+      if (safeFormat === 'portrait') {
+        canvasHeight = 1350;
+      } else if (safeFormat === 'story') {
+        canvasHeight = 1920;
+      }
+
       const pgClient = await getClientForUser(req.userId);
       try {
         const { rows } = await pgClient.query(
-          `INSERT INTO creatives (tenant_id, client_id, post_id, template_id, type, platform, slides, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')
+          `INSERT INTO creatives (
+             tenant_id, client_id, post_id, template_id, type, platform,
+             format, canvas_width, canvas_height,
+             layout_mode, font_combination, accent_color, instagram_handle, profile_config,
+             slides, status
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'draft')
            RETURNING id, tenant_id as "tenantId", client_id as "clientId", post_id as "postId",
-           template_id as "templateId", type, platform, slides, export_urls as "exportUrls",
+           template_id as "templateId", type, platform,
+           format, canvas_width as "canvasWidth", canvas_height as "canvasHeight",
+           layout_mode as "layoutMode", font_combination as "fontCombination",
+           accent_color as "accentColor", instagram_handle as "instagramHandle",
+           profile_config as "profileConfig", slides, export_urls as "exportUrls",
            status, created_at as "createdAt", updated_at as "updatedAt"`,
-          [tenantId, client_id, post_id, template_id, type || 'carousel', platform || 'instagram',
-           JSON.stringify(slides || [])]
+          [
+            tenantId,
+            client_id,
+            post_id,
+            template_id,
+            type || 'carousel',
+            platform || 'instagram',
+            safeFormat,
+            canvasWidth,
+            canvasHeight,
+            layoutMode || 'minimalist',
+            JSON.stringify(fontCombination || DEFAULT_FONT_COMBINATION),
+            accentColor || '#3B82F6',
+            instagramHandle || '',
+            profileConfig ? JSON.stringify(profileConfig) : null,
+            JSON.stringify(slides || []),
+          ]
         );
         res.status(201).json(rows[0]);
       } finally { pgClient.release(); }
@@ -1748,12 +2296,409 @@ export async function registerRoutes(
     }
   });
 
+  app.post('/api/creatives/generate', async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const {
+        clientId,
+        prompt,
+        slidesCount,
+        imageMode = 'both',
+        imageStyleHint,
+        layoutMode = 'minimalist',
+        format = 'portrait',
+        instagramHandle = '',
+        fontCombination = DEFAULT_FONT_COMBINATION,
+        accentColor = '#3B82F6',
+        generateImages = true,
+        textDepth,
+      } = req.body || {};
+
+      if (!clientId || !prompt) {
+        return res.status(400).json({ message: 'clientId e prompt sao obrigatorios' });
+      }
+
+      const safeSlideCount = clampSlideCount(slidesCount);
+      const safeImageMode = ['background', 'grid', 'both'].includes(imageMode) ? imageMode : 'both';
+      const safeLayoutMode = (['minimalist', 'profile', 'editorial', 'bold', 'split', 'cinematic', 'twitter'] as const).includes(layoutMode) ? layoutMode : 'minimalist';
+      const safeFormat = ['square', 'portrait', 'story'].includes(format) ? format : 'portrait';
+      const canvasDims = safeFormat === 'square' ? { w: 1080, h: 1080 } : safeFormat === 'story' ? { w: 1080, h: 1920 } : { w: 1080, h: 1350 };
+      const jobId = `creative-job-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      const userId = String(req.userId || '');
+
+      creativeGenerationJobs.set(jobId, {
+        jobId,
+        tenantId,
+        userId,
+        status: 'queued',
+        stage: 'Fila',
+        progress: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      queueMicrotask(async () => {
+        try {
+          updateCreativeGenerationJob(jobId, {
+            status: 'processing',
+            stage: 'Iniciando fluxo de agentes',
+            progress: 5,
+          });
+
+          // Usa o fluxo multi-agente para gerar slides
+          const agentResult = await generateSlidesWithAgents({
+            prompt,
+            slidesCount: safeSlideCount,
+            tenantId,
+            clientId,
+            userId,
+            pool,
+            tone: req.body?.tone || 'engajamento',
+            goal: req.body?.goal || 'engagement',
+            imageStyleHint,
+            textDepth,
+            onProgress: (stage, progress) => {
+              updateCreativeGenerationJob(jobId, {
+                status: 'processing',
+                stage,
+                progress,
+              });
+            },
+          });
+
+          const generatedCopy = agentResult.slides;
+          const imagePrompts = agentResult.imagePrompts;
+
+          updateCreativeGenerationJob(jobId, {
+            status: 'processing',
+            stage: agentResult.usedAgents
+              ? 'Slides gerados pelos agentes — gerando imagens'
+              : 'Gerando imagens dos slides',
+            progress: 60,
+          });
+
+          const slides = [];
+
+          for (let index = 0; index < generatedCopy.length; index++) {
+            const copy = generatedCopy[index];
+
+            updateCreativeGenerationJob(jobId, {
+              status: 'processing',
+              stage: `Processando slide ${index + 1}/${generatedCopy.length}`,
+              progress: 65 + Math.round((index / Math.max(1, generatedCopy.length)) * 25),
+            });
+
+            // Usa prompt do image-prompt-engine se disponível, senão gera um simples
+            const imagePrompt = imagePrompts?.[index]
+              ? imagePrompts[index]
+              : `${prompt}. Slide ${index + 1}: ${copy.title}`;
+
+            const imageUrl = generateImages
+              ? await generateSlideImage(imagePrompt, imageStyleHint)
+              : undefined;
+
+            slides.push(
+              buildCreativeSlide({
+                index,
+                title: copy.title,
+                subtitle: copy.subtitle,
+                accentColor,
+                layoutMode: safeLayoutMode,
+                imageMode: safeImageMode,
+                imageUrl,
+                imagePrompt,
+                fontCombination,
+                canvasHeight: canvasDims.h,
+              })
+            );
+          }
+
+          updateCreativeGenerationJob(jobId, {
+            status: 'processing',
+            stage: 'Salvando creative',
+            progress: 92,
+          });
+
+          const pgClient = await getClientForUser(userId);
+          try {
+            const { rows } = await pgClient.query(
+              `INSERT INTO creatives (
+                 tenant_id, client_id, type, platform, format, canvas_width, canvas_height,
+                 layout_mode, font_combination, accent_color, instagram_handle, slides, status
+               )
+               VALUES ($1, $2, 'carousel', 'instagram', $3, $4, $5, $6, $7, $8, $9, $10, 'draft')
+               RETURNING id`,
+              [
+                tenantId,
+                clientId,
+                safeFormat,
+                canvasDims.w,
+                canvasDims.h,
+                safeLayoutMode,
+                JSON.stringify(fontCombination || DEFAULT_FONT_COMBINATION),
+                accentColor,
+                instagramHandle,
+                JSON.stringify(slides),
+              ]
+            );
+
+            updateCreativeGenerationJob(jobId, {
+              status: 'completed',
+              stage: 'Concluido',
+              progress: 100,
+              creativeId: rows[0]?.id,
+            });
+          } finally {
+            pgClient.release();
+          }
+        } catch (error: any) {
+          console.error('Error generating creative job:', error);
+          updateCreativeGenerationJob(jobId, {
+            status: 'failed',
+            stage: 'Falha na geracao',
+            progress: 100,
+            error: error.message || 'Failed to generate creative',
+          });
+        }
+      });
+
+      return res.status(202).json({
+        job_id: jobId,
+        message: 'Geracao enfileirada',
+      });
+    } catch (error: any) {
+      console.error('Error queuing creative generation:', error);
+      return res.status(500).json({ message: error.message || 'Failed to queue creative generation' });
+    }
+  });
+
+  app.get('/api/creatives/jobs/:jobId', async (req, res) => {
+    const tenantId = requireTenantId(req, res);
+    if (!tenantId) return;
+
+    const job = creativeGenerationJobs.get(req.params.jobId);
+    if (!job || job.tenantId !== tenantId) {
+      return res.status(404).json({ message: 'Job not found' });
+    }
+
+    return res.json({
+      jobId: job.jobId,
+      status: job.status,
+      stage: job.stage,
+      progress: job.progress,
+      creativeId: job.creativeId,
+      error: job.error,
+    });
+  });
+
+  app.post('/api/creatives/:id/slides/:idx/generate-content', async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const slideIndex = Number.parseInt(req.params.idx, 10);
+      if (!Number.isInteger(slideIndex) || slideIndex < 0) {
+        return res.status(400).json({ message: 'idx invalido' });
+      }
+
+      const { instruction } = req.body || {};
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          'SELECT slides FROM creatives WHERE id = $1 AND tenant_id = $2',
+          [req.params.id, tenantId]
+        );
+        if (!rows[0]) return res.status(404).json({ message: 'Creative not found' });
+
+        const slides = Array.isArray(rows[0].slides) ? rows[0].slides : [];
+        if (!slides[slideIndex]) return res.status(404).json({ message: 'Slide not found' });
+
+        const current = slides[slideIndex]?.textLayout || { title: '', subtitle: '' };
+        const updatedText = await refineSlideCopy(
+          current,
+          instruction || 'Reescreva com mais clareza e objetividade'
+        );
+
+        slides[slideIndex] = {
+          ...slides[slideIndex],
+          textLayout: {
+            ...current,
+            ...updatedText,
+          },
+        };
+
+        await pgClient.query(
+          'UPDATE creatives SET slides = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3',
+          [JSON.stringify(slides), req.params.id, tenantId]
+        );
+
+        return res.json({
+          index: slideIndex,
+          textLayout: slides[slideIndex].textLayout,
+        });
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error('Error generating slide content:', error);
+      return res.status(500).json({ message: error.message || 'Failed to generate slide content' });
+    }
+  });
+
+  app.post('/api/creatives/:id/slides/:idx/refine', async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const slideIndex = Number.parseInt(req.params.idx, 10);
+      if (!Number.isInteger(slideIndex) || slideIndex < 0) {
+        return res.status(400).json({ message: 'idx invalido' });
+      }
+
+      const { instruction } = req.body || {};
+      if (!instruction || typeof instruction !== 'string') {
+        return res.status(400).json({ message: 'instruction e obrigatoria' });
+      }
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          'SELECT slides FROM creatives WHERE id = $1 AND tenant_id = $2',
+          [req.params.id, tenantId]
+        );
+        if (!rows[0]) return res.status(404).json({ message: 'Creative not found' });
+
+        const slides = Array.isArray(rows[0].slides) ? rows[0].slides : [];
+        if (!slides[slideIndex]) return res.status(404).json({ message: 'Slide not found' });
+
+        const current = slides[slideIndex]?.textLayout || { title: '', subtitle: '' };
+        const refined = await refineSlideCopy(current, instruction);
+        slides[slideIndex] = {
+          ...slides[slideIndex],
+          textLayout: {
+            ...current,
+            ...refined,
+          },
+        };
+
+        await pgClient.query(
+          'UPDATE creatives SET slides = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3',
+          [JSON.stringify(slides), req.params.id, tenantId]
+        );
+
+        return res.json({
+          index: slideIndex,
+          textLayout: slides[slideIndex].textLayout,
+        });
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error('Error refining slide:', error);
+      return res.status(500).json({ message: error.message || 'Failed to refine slide' });
+    }
+  });
+
+  app.post('/api/creatives/:id/slides/:idx/generate-image', async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const slideIndex = Number.parseInt(req.params.idx, 10);
+      if (!Number.isInteger(slideIndex) || slideIndex < 0) {
+        return res.status(400).json({ message: 'idx invalido' });
+      }
+
+      const { styleHint } = req.body || {};
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          'SELECT slides FROM creatives WHERE id = $1 AND tenant_id = $2',
+          [req.params.id, tenantId]
+        );
+        if (!rows[0]) return res.status(404).json({ message: 'Creative not found' });
+
+        const slides = Array.isArray(rows[0].slides) ? rows[0].slides : [];
+        if (!slides[slideIndex]) return res.status(404).json({ message: 'Slide not found' });
+
+        const title = slides[slideIndex]?.textLayout?.title || `Slide ${slideIndex + 1}`;
+        const subtitle = slides[slideIndex]?.textLayout?.subtitle || '';
+        // Usa o prompt gerado pelo image-prompt-engineer se disponível, senão usa title+subtitle
+        const storedPrompt = slides[slideIndex]?.imagePrompt;
+        const imagePrompt = storedPrompt || `${title}. ${subtitle}`;
+        const imageUrl = await generateSlideImage(imagePrompt, styleHint);
+
+        slides[slideIndex] = {
+          ...slides[slideIndex],
+          background: {
+            ...(slides[slideIndex]?.background || { type: 'image', value: imageUrl }),
+            type: 'image',
+            value: imageUrl,
+          },
+          imageGrid: {
+            ...(slides[slideIndex]?.imageGrid || {}),
+            imageUrl,
+          },
+        };
+
+        await pgClient.query(
+          'UPDATE creatives SET slides = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3',
+          [JSON.stringify(slides), req.params.id, tenantId]
+        );
+
+        return res.json({ imageUrl });
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error('Error generating slide image:', error);
+      return res.status(500).json({ message: error.message || 'Failed to generate slide image' });
+    }
+  });
+
+  app.post('/api/creatives/:id/caption', async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const { tone } = req.body || {};
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          'SELECT slides FROM creatives WHERE id = $1 AND tenant_id = $2',
+          [req.params.id, tenantId]
+        );
+        if (!rows[0]) return res.status(404).json({ message: 'Creative not found' });
+
+        const slides = Array.isArray(rows[0].slides) ? rows[0].slides : [];
+        const result = await generateCaptionFromSlides(slides, tone || 'engajamento');
+        return res.json(result);
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error('Error generating caption:', error);
+      return res.status(500).json({ message: error.message || 'Failed to generate caption' });
+    }
+  });
+
   app.put("/api/creatives/:id", async (req, res) => {
     try {
       const tenantId = requireTenantId(req, res);
       if (!tenantId) return;
 
-      const { slides, status, platform } = req.body;
+      const {
+        slides,
+        status,
+        platform,
+        layoutMode,
+        fontCombination,
+        accentColor,
+        instagramHandle,
+        profileConfig,
+      } = req.body;
       const pgClient = await getClientForUser(req.userId);
       try {
         const { rows } = await pgClient.query(
@@ -1761,12 +2706,31 @@ export async function registerRoutes(
             slides = COALESCE($1, slides),
             status = COALESCE($2, status),
             platform = COALESCE($3, platform),
+            layout_mode = COALESCE($4, layout_mode),
+            font_combination = COALESCE($5, font_combination),
+            accent_color = COALESCE($6, accent_color),
+            instagram_handle = COALESCE($7, instagram_handle),
+            profile_config = COALESCE($8, profile_config),
             updated_at = NOW()
-           WHERE id = $4 AND tenant_id = $5
+           WHERE id = $9 AND tenant_id = $10
            RETURNING id, tenant_id as "tenantId", client_id as "clientId", post_id as "postId",
-           template_id as "templateId", type, platform, slides, export_urls as "exportUrls",
+           template_id as "templateId", type, platform,
+           layout_mode as "layoutMode", font_combination as "fontCombination",
+           accent_color as "accentColor", instagram_handle as "instagramHandle",
+           profile_config as "profileConfig", slides, export_urls as "exportUrls",
            status, created_at as "createdAt", updated_at as "updatedAt"`,
-          [slides ? JSON.stringify(slides) : null, status, platform, req.params.id, tenantId]
+          [
+            slides ? JSON.stringify(slides) : null,
+            status,
+            platform,
+            layoutMode,
+            fontCombination ? JSON.stringify(fontCombination) : null,
+            accentColor,
+            instagramHandle,
+            profileConfig ? JSON.stringify(profileConfig) : null,
+            req.params.id,
+            tenantId,
+          ]
         );
         if (!rows[0]) return res.status(404).json({ message: "Creative not found" });
         res.json(rows[0]);
@@ -1792,7 +2756,10 @@ export async function registerRoutes(
             updated_at = NOW()
            WHERE id = $2 AND tenant_id = $3
            RETURNING id, tenant_id as "tenantId", client_id as "clientId", post_id as "postId",
-           template_id as "templateId", type, platform, slides, export_urls as "exportUrls",
+           template_id as "templateId", type, platform,
+           layout_mode as "layoutMode", font_combination as "fontCombination",
+           accent_color as "accentColor", instagram_handle as "instagramHandle",
+           profile_config as "profileConfig", slides, export_urls as "exportUrls",
            status, created_at as "createdAt", updated_at as "updatedAt"`,
           [JSON.stringify(exportUrls || []), req.params.id, tenantId]
         );
@@ -1822,6 +2789,52 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Error deleting creative:", error);
       res.status(500).json({ message: error.message || "Failed to delete creative" });
+    }
+  });
+
+  // ==================== TRENDS ROUTES (Apify) ====================
+  const { ApifySocialProvider } = await import("./services/apify-social-provider");
+  const apifyProvider = new ApifySocialProvider();
+
+  // POST /api/trends/tiktok — busca trends do TikTok Creative Center
+  app.post("/api/trends/tiktok", async (req, res) => {
+    try {
+      const { trendType = "hashtag", countryCode = "BR", period = 7, maxResults = 50 } = req.body;
+      const trends = await apifyProvider.fetchTikTokTrends({ trendType, countryCode, period, maxResults });
+      res.json({ success: true, count: trends.length, trends });
+    } catch (err: any) {
+      console.error("[trends/tiktok] Erro:", err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/trends/instagram — busca posts de uma hashtag no Instagram
+  app.post("/api/trends/instagram", async (req, res) => {
+    try {
+      const { hashtag, maxResults = 30 } = req.body;
+      if (!hashtag || typeof hashtag !== "string") {
+        return res.status(400).json({ success: false, error: "hashtag é obrigatório" });
+      }
+      const posts = await apifyProvider.fetchInstagramHashtag({ hashtag, maxResults });
+      res.json({ success: true, count: posts.length, posts });
+    } catch (err: any) {
+      console.error("[trends/instagram] Erro:", err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/trends/tiktok-hashtag — busca vídeos de uma hashtag no TikTok
+  app.post("/api/trends/tiktok-hashtag", async (req, res) => {
+    try {
+      const { hashtag, maxResults = 30 } = req.body;
+      if (!hashtag || typeof hashtag !== "string") {
+        return res.status(400).json({ success: false, error: "hashtag é obrigatório" });
+      }
+      const videos = await apifyProvider.fetchTikTokHashtag({ hashtag, maxResults });
+      res.json({ success: true, count: videos.length, videos });
+    } catch (err: any) {
+      console.error("[trends/tiktok-hashtag] Erro:", err.message);
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 

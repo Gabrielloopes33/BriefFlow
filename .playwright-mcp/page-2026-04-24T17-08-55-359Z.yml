@@ -1,0 +1,164 @@
+- generic [ref=e2]:
+  - generic [ref=e121]:
+    - generic [ref=e123]:
+      - generic [ref=e124]: Slides (6)
+      - generic [ref=e125]:
+        - button "Slide 1" [ref=e126] [cursor=pointer]
+        - button "Slide 2" [ref=e129] [cursor=pointer]
+        - button "Slide 3" [ref=e132] [cursor=pointer]
+        - button "Slide 4" [ref=e135] [cursor=pointer]
+        - button "Slide 5" [ref=e138] [cursor=pointer]
+        - button "Slide 6" [ref=e141] [cursor=pointer]
+    - generic [ref=e144]:
+      - generic [ref=e145]:
+        - generic [ref=e146]:
+          - heading "cb37f61e..." [level=1] [ref=e147]
+          - generic [ref=e148]: Rascunho
+        - generic [ref=e149]:
+          - button "Slide anterior" [disabled] [ref=e150]:
+            - img [ref=e151]
+          - generic [ref=e153]: Slide 1 de 6
+          - button "Proximo slide" [ref=e154] [cursor=pointer]:
+            - img [ref=e155]
+      - generic [ref=e164]:
+        - button "Salvar" [ref=e165] [cursor=pointer]:
+          - img [ref=e166]
+          - text: Salvar
+        - button "Baixar Slide 1" [ref=e170] [cursor=pointer]:
+          - img [ref=e171]
+          - text: Baixar Slide 1
+        - button "Exportar PNG" [ref=e175] [cursor=pointer]:
+          - img [ref=e176]
+          - text: Exportar PNG
+    - generic [ref=e180]:
+      - generic [ref=e181]:
+        - generic [ref=e182]:
+          - img [ref=e183]
+          - generic [ref=e185]: Tema do Slide
+        - generic [ref=e186]:
+          - button "Escuro" [ref=e187] [cursor=pointer]
+          - button "Claro" [ref=e188] [cursor=pointer]
+      - generic [ref=e189]:
+        - generic [ref=e190]:
+          - img [ref=e191]
+          - generic [ref=e193]: Layout do Slide
+        - generic [ref=e194]:
+          - text: Posicao do texto
+          - generic [ref=e195]:
+            - button "Sup. Esq" [ref=e196] [cursor=pointer]
+            - button "Sup. Centro" [ref=e197] [cursor=pointer]
+            - button "Sup. Dir" [ref=e198] [cursor=pointer]
+            - button "Meio Esq" [ref=e199] [cursor=pointer]
+            - button "Meio" [ref=e200] [cursor=pointer]
+            - button "Meio Dir" [ref=e201] [cursor=pointer]
+            - button "Inf. Esq" [ref=e202] [cursor=pointer]
+            - button "Inf. Centro" [ref=e203] [cursor=pointer]
+            - button "Inf. Dir" [ref=e204] [cursor=pointer]
+        - generic [ref=e205]:
+          - text: Alinhamento
+          - generic [ref=e206]:
+            - button "left" [ref=e207] [cursor=pointer]:
+              - img [ref=e208]
+            - button "center" [ref=e209] [cursor=pointer]:
+              - img [ref=e210]
+            - button "right" [ref=e211] [cursor=pointer]:
+              - img [ref=e212]
+        - generic [ref=e213]:
+          - text: Titulo
+          - textbox [ref=e214]: "Dica 1: Organize seu tempo"
+        - generic [ref=e215]:
+          - text: Subtitulo
+          - textbox [ref=e216]: Priorize tarefas e use calendário para gerenciar projetos
+      - generic [ref=e217]:
+        - generic [ref=e218]:
+          - img [ref=e219]
+          - generic [ref=e221]: Badge de Perfil
+        - generic [ref=e222]:
+          - checkbox "Exibir badge de perfil" [ref=e223]
+          - text: Exibir badge de perfil
+      - generic [ref=e224]:
+        - generic [ref=e225]:
+          - img [ref=e226]
+          - generic [ref=e228]: Botao CTA
+        - generic [ref=e229]:
+          - checkbox "Exibir botao CTA" [ref=e230]
+          - text: Exibir botao CTA
+      - generic [ref=e231]:
+        - generic [ref=e232]:
+          - img [ref=e233]
+          - generic [ref=e235]: Tipografia
+        - generic [ref=e236]:
+          - text: Escala global
+          - generic [ref=e237]:
+            - slider [ref=e238] [cursor=pointer]: "100"
+            - generic [ref=e239]: 100%
+        - generic [ref=e240]:
+          - text: Tamanho do titulo
+          - generic [ref=e241]:
+            - slider [ref=e242] [cursor=pointer]: "56"
+            - generic [ref=e243]: 56px
+        - generic [ref=e244]:
+          - text: Fonte do titulo
+          - combobox [ref=e245]:
+            - option "Inter"
+            - option "Space" [selected]
+            - option "Syne"
+            - option "Outfit"
+            - option "DM Sans"
+            - option "Raleway"
+            - option "Oswald"
+            - option "Playfair"
+            - option "Caveat"
+        - generic [ref=e246]:
+          - text: Tamanho do subtitulo
+          - generic [ref=e247]:
+            - slider [ref=e248] [cursor=pointer]: "28"
+            - generic [ref=e249]: 28px
+        - generic [ref=e250]:
+          - text: Cor de destaque
+          - textbox [ref=e251] [cursor=pointer]: "#3b82f6"
+        - generic [ref=e252]:
+          - text: Palavras em destaque
+          - 'textbox "Ex: IA, marketing, resultado" [ref=e253]'
+      - generic [ref=e254]:
+        - generic [ref=e255]:
+          - img [ref=e256]
+          - generic [ref=e258]: Imagem e Overlay
+        - generic [ref=e259]:
+          - text: Estilo de sombra/overlay
+          - combobox [ref=e260]:
+            - option "Nenhum"
+            - option "Base"
+            - option "Base Forte" [selected]
+            - option "Topo Forte"
+            - option "Diagonal Inf. Dir."
+            - option "Diagonal Sup. Esq."
+        - generic [ref=e261]:
+          - text: Opacidade
+          - generic [ref=e262]:
+            - slider [ref=e263] [cursor=pointer]: "60"
+            - generic [ref=e264]: 60%
+        - generic [ref=e265]:
+          - checkbox "Mostrar grade de imagem" [checked] [ref=e266]
+          - text: Mostrar grade de imagem
+        - generic [ref=e267]:
+          - text: Arredondamento da grade
+          - generic [ref=e268]:
+            - slider [ref=e269] [cursor=pointer]: "16"
+            - generic [ref=e270]: 16px
+      - generic [ref=e271]:
+        - generic [ref=e272]:
+          - img [ref=e273]
+          - generic [ref=e275]: IA por Slide
+        - button "Gerar conteudo deste slide" [ref=e276] [cursor=pointer]
+        - 'textbox "Instrucao de refinamento (ex: deixe mais direto e com CTA forte)" [ref=e277]'
+        - button "Refinar este slide" [disabled] [ref=e278]
+        - textbox "Dica visual para imagem (opcional)" [ref=e279]
+        - button "Gerar imagem deste slide" [ref=e280] [cursor=pointer]
+        - button "Aplicar configuracoes no proximo slide" [ref=e281] [cursor=pointer]
+      - generic [ref=e282]:
+        - img [ref=e283]
+        - generic [ref=e285]: Elemento Selecionado
+      - generic [ref=e286]: Selecione um texto no canvas para ajustes finos.
+  - region "Notifications (F8)":
+    - list

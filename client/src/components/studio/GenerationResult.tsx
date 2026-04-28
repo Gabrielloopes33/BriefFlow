@@ -11,9 +11,10 @@ interface StudioPost {
 interface GenerationResultProps {
   post: StudioPost | null;
   creativeId?: string;
+  creativeEntryHref?: string;
 }
 
-export function GenerationResult({ post, creativeId }: GenerationResultProps) {
+export function GenerationResult({ post, creativeId, creativeEntryHref }: GenerationResultProps) {
   if (!post) return null;
 
   return (
@@ -32,6 +33,10 @@ export function GenerationResult({ post, creativeId }: GenerationResultProps) {
           {creativeId ? (
             <a href={`/creatives/${creativeId}/edit`}>
               <Button>Abrir no Studio Visual</Button>
+            </a>
+          ) : creativeEntryHref ? (
+            <a href={creativeEntryHref}>
+              <Button>Levar para Creative</Button>
             </a>
           ) : null}
         </div>
