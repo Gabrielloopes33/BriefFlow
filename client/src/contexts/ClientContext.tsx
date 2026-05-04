@@ -13,7 +13,7 @@ const ClientContext = createContext<ClientContextType | undefined>(undefined);
 
 interface ClientProviderProps {
   children: ReactNode;
-  initialClients: any[];
+  initialClients?: any[];
 }
 
 export function ClientProvider({ children, initialClients }: ClientProviderProps) {
@@ -49,8 +49,10 @@ export function ClientProvider({ children, initialClients }: ClientProviderProps
   }, []);
 
   // Encontra o cliente ativo na lista
+  const clientList = initialClients || [];
+
   const activeClient = activeClientId 
-    ? initialClients.find(c => c.id === activeClientId) || null
+    ? clientList.find(c => c.id === activeClientId) || null
     : null;
 
   const setActiveClient = useCallback((clientId: string | null) => {

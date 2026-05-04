@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { useClients } from "@/hooks/use-clients";
 import { useKnowledgeItems, useDeleteKnowledgeItem } from "@/hooks/use-knowledge";
@@ -59,6 +60,7 @@ const typeLabels = {
 };
 
 export function ClientsPage() {
+    const [, setLocation] = useLocation();
     const { data: clients, isLoading: clientsLoading } = useClients();
     const [selectedClient, setSelectedClient] = useState<Client | null>(null);
     const { data: knowledgeItems, isLoading: knowledgeLoading } = useKnowledgeItems(selectedClient?.id || "");
@@ -107,7 +109,7 @@ export function ClientsPage() {
                                 <Card 
                                     key={client.id} 
                                     className="feature-card cursor-pointer group"
-                                    onClick={() => setSelectedClient(client)}
+                                    onClick={() => setLocation(`/clients/${client.id}`)}
                                 >
                                     <CardHeader className="pb-3">
                                         <CardTitle className="text-lg font-display">{client.name}</CardTitle>
@@ -146,17 +148,29 @@ export function ClientsPage() {
                                                 <Database size={14} />
                                                 <span>Base de conhecimento</span>
                                             </div>
-                                            <Button 
-                                                variant="ghost" 
-                                                size="sm"
-                                                className="text-primary hover:text-primary hover:bg-primary/10"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setSelectedClient(client);
-                                                }}
-                                            >
-                                                Ver Base
-                                            </Button>
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="text-primary hover:text-primary hover:bg-primary/10"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setSelectedClient(client);
+                                                    }}
+                                                >
+                                                    Ver Base
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setLocation(`/clients/${client.id}`);
+                                                    }}
+                                                >
+                                                    Workspace
+                                                </Button>
+                                            </div>
                                         </div>
                                     </CardContent>
                                 </Card>

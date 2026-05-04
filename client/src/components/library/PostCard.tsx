@@ -41,8 +41,14 @@ export function PostCard({ post, onOpenDetail }: Props) {
 
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>{created}</span>
-          <span>Nota do revisor: --/10</span>
+          <span>{post.stage_tag ? `Tag: ${post.stage_tag}` : "Sem tag"}</span>
         </div>
+
+        {post.scheduled_for ? (
+          <div className="text-xs text-cyan-300">
+            Agendado para: {new Date(post.scheduled_for).toLocaleString("pt-BR")}
+          </div>
+        ) : null}
 
         <div className="flex gap-2">
           <Button variant="outline" size="sm" className="flex-1" onClick={() => onOpenDetail(post)}>

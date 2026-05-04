@@ -3,18 +3,30 @@ import { useParams, useLocation } from 'wouter';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useClientContext } from '@/contexts/ClientContext';
 import { useClient } from '@/hooks/use-clients';
+import { useWorkspaceRealtime } from '@/hooks/use-workspace-realtime';
 import { OverviewTab } from './OverviewTab';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Loader2, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-type WorkspaceTab = 'overview' | 'sources' | 'contents' | 'briefs' | 'settings';
+type WorkspaceTab =
+  | 'overview'
+  | 'sources'
+  | 'contents'
+  | 'calendar'
+  | 'kanban'
+  | 'collaboration'
+  | 'briefs'
+  | 'settings';
 
 const tabs: { id: WorkspaceTab; label: string; icon: any }[] = [
   { id: 'overview', label: 'Visão Geral', icon: Sparkles },
   { id: 'sources', label: 'Fontes', icon: () => null },
   { id: 'contents', label: 'Conteúdos', icon: () => null },
+  { id: 'calendar', label: 'Calendário', icon: () => null },
+  { id: 'kanban', label: 'Kanban', icon: () => null },
+  { id: 'collaboration', label: 'Colaboração', icon: () => null },
   { id: 'briefs', label: 'Pautas', icon: () => null },
   { id: 'settings', label: 'Config', icon: () => null },
 ];
@@ -22,6 +34,9 @@ const tabs: { id: WorkspaceTab; label: string; icon: any }[] = [
 interface ClientWorkspaceProps {
   sourcesTab?: React.ComponentType<{ clientId: string }>;
   contentsTab?: React.ComponentType<{ clientId: string }>;
+  calendarTab?: React.ComponentType<{ clientId: string }>;
+  kanbanTab?: React.ComponentType<{ clientId: string }>;
+  collaborationTab?: React.ComponentType<{ clientId: string }>;
   briefsTab?: React.ComponentType<{ clientId: string }>;
   settingsTab?: React.ComponentType<{ clientId: string }>;
 }
@@ -29,10 +44,14 @@ interface ClientWorkspaceProps {
 export function ClientWorkspace({
   sourcesTab: SourcesTabComponent,
   contentsTab: ContentsTabComponent,
+  calendarTab: CalendarTabComponent,
+  kanbanTab: KanbanTabComponent,
+  collaborationTab: CollaborationTabComponent,
   briefsTab: BriefsTabComponent,
   settingsTab: SettingsTabComponent,
 }: ClientWorkspaceProps) {
   const { clientId } = useParams();
+  useWorkspaceRealtime(clientId || null);
   const [location] = useLocation();
   const searchParams = new URLSearchParams(location.split('?')[1] || '');
   const { setActiveClient } = useClientContext();
@@ -62,6 +81,12 @@ export function ClientWorkspace({
         return SourcesTabComponent ? <SourcesTabComponent clientId={clientId!} /> : null;
       case 'contents':
         return ContentsTabComponent ? <ContentsTabComponent clientId={clientId!} /> : null;
+      case 'calendar':
+        return CalendarTabComponent ? <CalendarTabComponent clientId={clientId!} /> : null;
+      case 'kanban':
+        return KanbanTabComponent ? <KanbanTabComponent clientId={clientId!} /> : null;
+      case 'collaboration':
+        return CollaborationTabComponent ? <CollaborationTabComponent clientId={clientId!} /> : null;
       case 'briefs':
         return BriefsTabComponent ? <BriefsTabComponent clientId={clientId!} /> : null;
       case 'settings':

@@ -21,13 +21,11 @@ export function LandingPage() {
                         <a href="#docs" className="hover:text-foreground transition-colors">Docs</a>
                     </div>
                     <div className="flex items-center gap-4">
-                        <Link href="/dashboard">
-                            <a className="text-sm font-medium hover:text-primary transition-colors">Entrar</a>
+                        <Link href="/dashboard" className="text-sm font-medium hover:text-primary transition-colors">
+                            Entrar
                         </Link>
-                        <Link href="/dashboard">
-                            <a className="bg-primary hover:bg-primary/90 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all shadow-[0_0_20px_-5px_rgba(250,93,25,0.5)] hover:shadow-[0_0_25px_-5px_rgba(250,93,25,0.6)]">
-                                Começar Agora
-                            </a>
+                        <Link href="/dashboard" className="bg-primary hover:bg-primary/90 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all shadow-[0_0_20px_-5px_rgba(250,93,25,0.5)] hover:shadow-[0_0_25px_-5px_rgba(250,93,25,0.6)]">
+                            Começar Agora
                         </Link>
                     </div>
                 </div>
@@ -56,10 +54,8 @@ export function LandingPage() {
                     </p>
 
                     <div className="flex flex-col md:flex-row items-center justify-center gap-4 fade-in [animation-delay:0.3s]">
-                        <Link href="/dashboard">
-                            <a className="w-full md:w-auto h-12 px-8 rounded-lg bg-white text-black font-semibold flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors">
-                                Começar Grátis <ArrowRight className="w-4 h-4" />
-                            </a>
+                        <Link href="/dashboard" className="w-full md:w-auto h-12 px-8 rounded-lg bg-white text-black font-semibold flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors">
+                            Começar Grátis <ArrowRight className="w-4 h-4" />
                         </Link>
                         <button className="w-full md:w-auto h-12 px-8 rounded-lg border border-border bg-secondary/50 text-foreground font-medium hover:bg-secondary transition-colors">
                             Ver Documentação

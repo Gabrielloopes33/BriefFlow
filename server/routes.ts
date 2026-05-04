@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import type { Server } from "http";
+import { createHash, randomBytes } from "crypto";
 import { pool, getClientForUser } from "./pg-pool";
 import { startPostWorker } from "./services/post-worker";
 import { CrawlerClient } from "./services/crawler-client";
@@ -13,18 +14,48 @@ import {
 } from "./services/creative-ai";
 import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerAnalyticsRoutes } from "./routes/analytics";
-import { broadcastJobEvent } from "./websocket/job-broadcaster";
+import { registerAuthRoutes } from "./routes/auth";
+import { broadcastJobEvent, broadcastToUsers } from "./websocket/job-broadcaster";
+import type { JobEvent } from "./websocket/job-events";
 import { buildSlideFromTemplate } from "./slide-templates";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  const WORKSPACE_STATUS_ORDER = [
+    "draft",
+    "in_production",
+    "needs_adjustment",
+    "ready_review",
+    "in_approval",
+    "approved",
+    "scheduled",
+    "published",
+    "rejected",
+  ] as const;
+
+  const WORKSPACE_STATUS_LABELS: Record<string, string> = {
+    draft: "Rascunho",
+    in_production: "Em produção",
+    needs_adjustment: "Ajuste",
+    ready_review: "Revisão",
+    in_approval: "Em aprovação",
+    approved: "Aprovado",
+    scheduled: "Agendado",
+    published: "Publicado",
+    rejected: "Rejeitado",
+  };
+
   const STATUS_TRANSITIONS: Record<string, string[]> = {
-    draft: ["ready_review"],
-    ready_review: ["approved", "draft"],
-    approved: ["published", "ready_review"],
-    rejected: ["draft"],
+    draft: ["ready_review", "in_production", "in_approval"],
+    in_production: ["needs_adjustment", "in_approval", "draft"],
+    needs_adjustment: ["in_production", "in_approval", "draft"],
+    ready_review: ["approved", "draft", "needs_adjustment", "in_approval"],
+    in_approval: ["approved", "needs_adjustment", "draft"],
+    approved: ["scheduled", "published", "ready_review", "in_approval"],
+    scheduled: ["published", "in_approval", "needs_adjustment"],
+    rejected: ["draft", "in_production"],
     published: [],
   };
 
@@ -37,13 +68,65 @@ export async function registerRoutes(
   }
 
   function requireTenantId(req: any, res: any): string | null {
-    const tenantId = resolveTenantId(req);
+    const tenantId = resolveTenantId(req) || req.tenantId || null;
     if (!tenantId) {
       res.status(400).json({ message: "Missing tenant_id. Send x-tenant-id header or tenant_id param." });
       return null;
     }
     return tenantId;
   }
+
+  function createPublicAccessToken(): { raw: string; hash: string } {
+    const raw = `bfp_${randomBytes(32).toString("hex")}`;
+    const hash = createHash("sha256").update(raw).digest("hex");
+    return { raw, hash };
+  }
+
+  async function broadcastTenantWorkspaceEvent(tenantId: string, event: JobEvent): Promise<void> {
+    try {
+      const { rows } = await pool.query(
+        `SELECT COALESCE(app_user_id, user_id)::text AS user_id
+         FROM tenant_members
+         WHERE tenant_id = $1 AND is_active = true`,
+        [tenantId]
+      );
+
+      const userIds = rows
+        .map((r: any) => String(r.user_id || ""))
+        .filter((id: string) => id.length > 0);
+
+      if (userIds.length === 0) return;
+      broadcastToUsers(userIds, event);
+    } catch (error) {
+      console.warn("[workspace-ws] Failed to broadcast tenant event", error);
+    }
+  }
+
+  async function resolveExternalTokenAccess(rawToken: string) {
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const { rows } = await pool.query(
+      `SELECT id, tenant_id, client_id, post_id, thread_id, permissions, expires_at, revoked_at
+       FROM external_access_tokens
+       WHERE token_hash = $1
+       LIMIT 1`,
+      [tokenHash]
+    );
+
+    const accessRow = rows[0];
+    if (!accessRow) return null;
+
+    if (accessRow.revoked_at) return null;
+    if (new Date(accessRow.expires_at).getTime() <= Date.now()) return null;
+
+    await pool.query(
+      `UPDATE external_access_tokens SET last_used_at = NOW() WHERE id = $1`,
+      [accessRow.id]
+    );
+
+    return accessRow;
+  }
+
+  registerAuthRoutes(app);
 
   // Clients - Protected Routes
   app.get("/api/clients", async (req, res) => {
@@ -1139,8 +1222,14 @@ export async function registerRoutes(
       const pgClient = await getClientForUser(req.userId);
       try {
         const { rows } = await pgClient.query(
-          `SELECT id, client_id, title, content, channels, status, generated_by, created_at, updated_at
-           FROM posts WHERE client_id=$1 AND tenant_id=$2 ORDER BY created_at DESC`,
+          `SELECT p.id, p.client_id, p.title, p.content,
+                  COALESCE(to_jsonb(p) -> 'channels', '[]'::jsonb) AS channels,
+                  p.status, p.generated_by,
+                  (to_jsonb(p) ->> 'scheduled_for')::timestamptz AS scheduled_for,
+                  COALESCE(to_jsonb(p) ->> 'stage_tag', 'draft') AS stage_tag,
+                  COALESCE((to_jsonb(p) ->> 'kanban_order')::int, 0) AS kanban_order,
+                  p.created_at, p.updated_at
+           FROM posts p WHERE p.client_id=$1 AND p.tenant_id=$2 ORDER BY p.created_at DESC`,
           [req.params.clientId, tenantId]
         );
         res.json(rows);
@@ -1148,6 +1237,732 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Error fetching posts:", error);
       res.status(500).json({ message: error.message || "Failed to fetch posts" });
+    }
+  });
+
+  // Client workspace: calendar view of posts (weekly/monthly)
+  app.get("/api/clients/:clientId/posts/calendar", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const view = typeof req.query.view === "string" ? req.query.view : "month";
+      const fromInput = typeof req.query.from === "string" ? req.query.from : null;
+      const toInput = typeof req.query.to === "string" ? req.query.to : null;
+
+      const now = new Date();
+      const defaultFrom = new Date(now);
+      const defaultTo = new Date(now);
+
+      if (view === "week") {
+        const dayOffset = (now.getDay() + 6) % 7;
+        defaultFrom.setDate(now.getDate() - dayOffset);
+        defaultFrom.setHours(0, 0, 0, 0);
+        defaultTo.setDate(defaultFrom.getDate() + 6);
+        defaultTo.setHours(23, 59, 59, 999);
+      } else {
+        defaultFrom.setDate(1);
+        defaultFrom.setHours(0, 0, 0, 0);
+        defaultTo.setMonth(defaultTo.getMonth() + 1, 0);
+        defaultTo.setHours(23, 59, 59, 999);
+      }
+
+      const fromDate = fromInput ? new Date(fromInput) : defaultFrom;
+      const toDate = toInput ? new Date(toInput) : defaultTo;
+
+      if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+        return res.status(400).json({ message: "Invalid date range. Use ISO dates in from/to." });
+      }
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          `SELECT p.id, p.client_id, p.title, p.content, p.status, p.generated_by,
+                  (to_jsonb(p) ->> 'scheduled_for')::timestamptz AS scheduled_for,
+                  COALESCE(to_jsonb(p) ->> 'stage_tag', 'draft') AS stage_tag,
+                  COALESCE((to_jsonb(p) ->> 'kanban_order')::int, 0) AS kanban_order,
+                  p.created_at, p.updated_at,
+                  (to_jsonb(p) ->> 'status_updated_at')::timestamptz AS status_updated_at,
+                  to_jsonb(p) ->> 'status_updated_by' AS status_updated_by
+           FROM posts p
+           WHERE p.client_id=$1
+             AND p.tenant_id=$2
+             AND COALESCE((to_jsonb(p) ->> 'scheduled_for')::timestamptz, p.created_at) >= $3
+             AND COALESCE((to_jsonb(p) ->> 'scheduled_for')::timestamptz, p.created_at) <= $4
+           ORDER BY COALESCE((to_jsonb(p) ->> 'scheduled_for')::timestamptz, p.created_at) ASC, p.created_at ASC`,
+          [req.params.clientId, tenantId, fromDate.toISOString(), toDate.toISOString()]
+        );
+
+        const buckets: Record<string, any[]> = {};
+        for (const row of rows) {
+          const dateSource = row.scheduled_for || row.created_at;
+          const key = new Date(dateSource).toISOString().slice(0, 10);
+          if (!buckets[key]) buckets[key] = [];
+          buckets[key].push(row);
+        }
+
+        res.json({
+          view,
+          from: fromDate.toISOString(),
+          to: toDate.toISOString(),
+          items: rows,
+          buckets,
+        });
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error fetching client calendar posts:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch client calendar" });
+    }
+  });
+
+  // Client workspace: kanban columns grouped by status
+  app.get("/api/clients/:clientId/posts/kanban", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          `SELECT p.id, p.client_id, p.title, p.content, p.status, p.generated_by,
+                  (to_jsonb(p) ->> 'scheduled_for')::timestamptz AS scheduled_for,
+                  COALESCE(to_jsonb(p) ->> 'stage_tag', 'draft') AS stage_tag,
+                  COALESCE((to_jsonb(p) ->> 'kanban_order')::int, 0) AS kanban_order,
+                  p.created_at, p.updated_at,
+                  (to_jsonb(p) ->> 'status_updated_at')::timestamptz AS status_updated_at,
+                  to_jsonb(p) ->> 'status_updated_by' AS status_updated_by
+           FROM posts p
+           WHERE p.client_id=$1 AND p.tenant_id=$2
+           ORDER BY COALESCE((to_jsonb(p) ->> 'kanban_order')::int, 0) ASC, p.created_at DESC`,
+          [req.params.clientId, tenantId]
+        );
+
+        const grouped: Record<string, any[]> = {};
+        for (const statusKey of WORKSPACE_STATUS_ORDER) {
+          grouped[statusKey] = [];
+        }
+
+        for (const row of rows) {
+          const key = grouped[row.status] ? row.status : "draft";
+          grouped[key].push(row);
+        }
+
+        const columns: Array<{ id: string; label: string; items: any[] }> = WORKSPACE_STATUS_ORDER
+          .filter((statusKey) => statusKey !== "ready_review" && statusKey !== "rejected")
+          .map((statusKey) => ({
+            id: statusKey,
+            label: WORKSPACE_STATUS_LABELS[statusKey] || statusKey,
+            items: grouped[statusKey] || [],
+          }));
+
+        if ((grouped.ready_review || []).length > 0) {
+          columns.splice(3, 0, {
+            id: "ready_review",
+            label: WORKSPACE_STATUS_LABELS.ready_review,
+            items: grouped.ready_review,
+          });
+        }
+
+        if ((grouped.rejected || []).length > 0) {
+          columns.push({
+            id: "rejected",
+            label: WORKSPACE_STATUS_LABELS.rejected,
+            items: grouped.rejected,
+          });
+        }
+
+        res.json({ columns, total: rows.length });
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error fetching client kanban posts:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch client kanban" });
+    }
+  });
+
+  // Batch update posts for kanban/calendar operations
+  app.patch("/api/posts/batch", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const { post_ids, status, scheduled_for, stage_tag } = req.body || {};
+
+      if (!Array.isArray(post_ids) || post_ids.length === 0) {
+        return res.status(400).json({ message: "Field 'post_ids' must be a non-empty array." });
+      }
+
+      if (status === undefined && scheduled_for === undefined && stage_tag === undefined) {
+        return res.status(400).json({ message: "Provide at least one updatable field: status, scheduled_for, stage_tag." });
+      }
+
+      if (status !== undefined && !Object.prototype.hasOwnProperty.call(STATUS_TRANSITIONS, status)) {
+        return res.status(400).json({ message: `Invalid status '${status}'.` });
+      }
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        await pgClient.query("BEGIN");
+
+        const { rows: existingRows } = await pgClient.query(
+          `SELECT id, status
+           FROM posts
+           WHERE tenant_id = $1 AND id = ANY($2::uuid[])
+           FOR UPDATE`,
+          [tenantId, post_ids]
+        );
+
+        if (existingRows.length !== post_ids.length) {
+          await pgClient.query("ROLLBACK");
+          return res.status(404).json({ message: "One or more posts were not found for this tenant." });
+        }
+
+        if (status !== undefined) {
+          for (const postRow of existingRows) {
+            const currentStatus = String(postRow.status);
+            if (currentStatus === status) continue;
+            const allowed = STATUS_TRANSITIONS[currentStatus] || [];
+            if (!allowed.includes(status)) {
+              await pgClient.query("ROLLBACK");
+              return res.status(400).json({
+                message: `Invalid transition for post ${postRow.id}: ${currentStatus} -> ${status}. Allowed: ${allowed.join(", ") || "none"}.`,
+              });
+            }
+          }
+        }
+
+        const { rows: updatedRows } = await pgClient.query(
+          `UPDATE posts
+           SET status = COALESCE($1, status),
+               scheduled_for = COALESCE($2::timestamptz, scheduled_for),
+               stage_tag = COALESCE($3, stage_tag),
+               status_updated_at = CASE WHEN $1 IS NOT NULL THEN NOW() ELSE status_updated_at END,
+               status_updated_by = CASE WHEN $1 IS NOT NULL THEN $4 ELSE status_updated_by END,
+               updated_at = NOW()
+           WHERE tenant_id = $5 AND id = ANY($6::uuid[])
+           RETURNING id, client_id, title, content, channels, status, generated_by,
+                     scheduled_for, stage_tag, kanban_order,
+                     created_at, updated_at, status_updated_at, status_updated_by`,
+          [status ?? null, scheduled_for ?? null, stage_tag ?? null, req.userId, tenantId, post_ids]
+        );
+
+        if (status !== undefined) {
+          for (const postRow of existingRows) {
+            if (String(postRow.status) === status) continue;
+            await pgClient.query(
+              `INSERT INTO post_status_history (tenant_id, post_id, from_status, to_status, changed_by)
+               VALUES ($1, $2, $3, $4, $5)`,
+              [tenantId, postRow.id, postRow.status, status, req.userId]
+            );
+          }
+        }
+
+        await pgClient.query("COMMIT");
+
+        for (const item of updatedRows) {
+          await broadcastTenantWorkspaceEvent(tenantId, {
+            type: "workspace:post-updated",
+            tenantId,
+            clientId: String(item.client_id),
+            postId: String(item.id),
+            status: item.status,
+            stageTag: item.stage_tag,
+            scheduledFor: item.scheduled_for,
+          });
+        }
+
+        return res.json({ updated: updatedRows.length, items: updatedRows });
+      } catch (error) {
+        await pgClient.query("ROLLBACK");
+        throw error;
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error batch updating posts:", error);
+      res.status(500).json({ message: error.message || "Failed to batch update posts" });
+    }
+  });
+
+  // Client workspace collaboration: thread summaries
+  app.get("/api/clients/:clientId/threads", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const contextType = typeof req.query.context_type === "string" ? req.query.context_type : undefined;
+      const postId = typeof req.query.post_id === "string" ? req.query.post_id : undefined;
+
+      const whereParts = ["t.tenant_id = $1", "t.client_id = $2"];
+      const params: any[] = [tenantId, req.params.clientId];
+
+      if (contextType) {
+        params.push(contextType);
+        whereParts.push(`t.context_type = $${params.length}`);
+      }
+
+      if (postId) {
+        params.push(postId);
+        whereParts.push(`t.post_id = $${params.length}`);
+      }
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          `SELECT
+             t.id,
+             t.client_id,
+             t.post_id,
+             t.context_type,
+             t.task_title,
+             t.stage_tag,
+             t.created_at,
+             t.updated_at,
+             lm.message AS last_message,
+             lm.created_at AS last_message_at,
+             COALESCE(mc.total_messages, 0) AS total_messages
+           FROM content_threads t
+           LEFT JOIN LATERAL (
+             SELECT message, created_at
+             FROM content_messages
+             WHERE thread_id = t.id AND tenant_id = t.tenant_id
+             ORDER BY created_at DESC
+             LIMIT 1
+           ) lm ON TRUE
+           LEFT JOIN LATERAL (
+             SELECT COUNT(*)::int AS total_messages
+             FROM content_messages
+             WHERE thread_id = t.id AND tenant_id = t.tenant_id
+           ) mc ON TRUE
+           WHERE ${whereParts.join(" AND ")}
+           ORDER BY COALESCE(lm.created_at, t.updated_at, t.created_at) DESC`,
+          params
+        );
+        res.json(rows);
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error fetching collaboration threads:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch collaboration threads" });
+    }
+  });
+
+  app.post("/api/clients/:clientId/threads", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const { post_id, context_type, task_title, stage_tag } = req.body || {};
+      const normalizedContext = typeof context_type === "string" ? context_type : "content";
+
+      if (!["content", "task"].includes(normalizedContext)) {
+        return res.status(400).json({ message: "Field 'context_type' must be 'content' or 'task'." });
+      }
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          `INSERT INTO content_threads (
+             tenant_id, client_id, post_id, context_type, task_title, stage_tag, created_by
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [tenantId, req.params.clientId, post_id ?? null, normalizedContext, task_title ?? null, stage_tag ?? null, req.userId]
+        );
+        res.status(201).json(rows[0]);
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error creating collaboration thread:", error);
+      res.status(500).json({ message: error.message || "Failed to create collaboration thread" });
+    }
+  });
+
+  app.get("/api/threads/:threadId/messages", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const threadResult = await pgClient.query(
+          `SELECT id FROM content_threads WHERE id = $1 AND tenant_id = $2`,
+          [req.params.threadId, tenantId]
+        );
+
+        if (!threadResult.rows[0]) {
+          return res.status(404).json({ message: "Thread not found" });
+        }
+
+        const { rows } = await pgClient.query(
+          `SELECT id, thread_id, author_id, author_role, message, metadata, created_at
+           FROM content_messages
+           WHERE thread_id = $1 AND tenant_id = $2
+           ORDER BY created_at ASC`,
+          [req.params.threadId, tenantId]
+        );
+
+        res.json(rows);
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error fetching thread messages:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch thread messages" });
+    }
+  });
+
+  app.post("/api/threads/:threadId/messages", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const { message, metadata, author_role } = req.body || {};
+      if (typeof message !== "string" || message.trim().length === 0) {
+        return res.status(400).json({ message: "Field 'message' is required." });
+      }
+
+      const normalizedAuthorRole = author_role === "client" ? "client" : "team";
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        await pgClient.query("BEGIN");
+
+        const threadResult = await pgClient.query(
+          `SELECT id, client_id FROM content_threads WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+          [req.params.threadId, tenantId]
+        );
+
+        if (!threadResult.rows[0]) {
+          await pgClient.query("ROLLBACK");
+          return res.status(404).json({ message: "Thread not found" });
+        }
+
+        const insertResult = await pgClient.query(
+          `INSERT INTO content_messages (
+             tenant_id, thread_id, author_id, author_role, message, metadata
+           )
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING id, thread_id, author_id, author_role, message, metadata, created_at`,
+          [tenantId, req.params.threadId, req.userId, normalizedAuthorRole, message.trim(), metadata ? JSON.stringify(metadata) : '{}']
+        );
+
+        await pgClient.query(
+          `UPDATE content_threads
+           SET updated_at = NOW()
+           WHERE id = $1 AND tenant_id = $2`,
+          [req.params.threadId, tenantId]
+        );
+
+        await pgClient.query("COMMIT");
+
+        await broadcastTenantWorkspaceEvent(tenantId, {
+          type: "workspace:message-created",
+          tenantId,
+          clientId: String(threadResult.rows[0].client_id),
+          threadId: String(req.params.threadId),
+          messageId: String(insertResult.rows[0].id),
+          authorRole: normalizedAuthorRole,
+        });
+
+        res.status(201).json(insertResult.rows[0]);
+      } catch (error) {
+        await pgClient.query("ROLLBACK");
+        throw error;
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error sending thread message:", error);
+      res.status(500).json({ message: error.message || "Failed to send thread message" });
+    }
+  });
+
+  // Create signed public link for client interaction without login
+  app.post("/api/clients/:clientId/public-links", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const { post_id, thread_id, expires_in_hours, permissions } = req.body || {};
+      const ttlHours = Number.isFinite(Number(expires_in_hours))
+        ? Math.max(1, Math.min(168, Number(expires_in_hours)))
+        : 72;
+      const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
+
+      const token = createPublicAccessToken();
+      const mergedPermissions = {
+        can_comment: true,
+        can_update_status: true,
+        ...(permissions || {}),
+      };
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          `INSERT INTO external_access_tokens (
+             tenant_id, client_id, post_id, thread_id, token_hash, permissions, created_by, expires_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING id, expires_at`,
+          [
+            tenantId,
+            req.params.clientId,
+            post_id ?? null,
+            thread_id ?? null,
+            token.hash,
+            JSON.stringify(mergedPermissions),
+            req.userId,
+            expiresAt.toISOString(),
+          ]
+        );
+
+        const baseUrl = `${req.protocol}://${req.get("host")}`;
+        const publicUrl = `${baseUrl}/client-access/${token.raw}`;
+
+        res.status(201).json({
+          id: rows[0].id,
+          url: publicUrl,
+          token: token.raw,
+          expires_at: rows[0].expires_at,
+          permissions: mergedPermissions,
+        });
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error creating public link:", error);
+      res.status(500).json({ message: error.message || "Failed to create public link" });
+    }
+  });
+
+  // Public portal: resolve access token and return linked context
+  app.get("/api/public/access/:token", async (req, res) => {
+    try {
+      const access = await resolveExternalTokenAccess(req.params.token);
+      if (!access) return res.status(404).json({ message: "Invalid or expired access token" });
+
+      const { rows: clientRows } = await pool.query(
+        `SELECT id, name, description FROM clients WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+        [access.client_id, access.tenant_id]
+      );
+
+      let post: any = null;
+      if (access.post_id) {
+        const { rows } = await pool.query(
+          `SELECT id, client_id, title, content, status, stage_tag, scheduled_for, created_at, updated_at
+           FROM posts
+           WHERE id = $1 AND tenant_id = $2
+           LIMIT 1`,
+          [access.post_id, access.tenant_id]
+        );
+        post = rows[0] || null;
+      }
+
+      let thread: any = null;
+      let messages: any[] = [];
+      if (access.thread_id) {
+        const threadResult = await pool.query(
+          `SELECT id, client_id, post_id, context_type, task_title, stage_tag, created_at, updated_at
+           FROM content_threads
+           WHERE id = $1 AND tenant_id = $2
+           LIMIT 1`,
+          [access.thread_id, access.tenant_id]
+        );
+        thread = threadResult.rows[0] || null;
+
+        if (thread) {
+          const messagesResult = await pool.query(
+            `SELECT id, thread_id, author_role, message, metadata, created_at
+             FROM content_messages
+             WHERE thread_id = $1 AND tenant_id = $2
+             ORDER BY created_at ASC`,
+            [thread.id, access.tenant_id]
+          );
+          messages = messagesResult.rows;
+        }
+      }
+
+      return res.json({
+        client: clientRows[0] || null,
+        post,
+        thread,
+        messages,
+        permissions: access.permissions || {},
+        expires_at: access.expires_at,
+      });
+    } catch (error: any) {
+      console.error("Error resolving public access token:", error);
+      res.status(500).json({ message: error.message || "Failed to resolve access token" });
+    }
+  });
+
+  // Public portal: add client message in thread
+  app.post("/api/public/access/:token/messages", async (req, res) => {
+    try {
+      const access = await resolveExternalTokenAccess(req.params.token);
+      if (!access) return res.status(404).json({ message: "Invalid or expired access token" });
+
+      const canComment = Boolean(access.permissions?.can_comment ?? true);
+      if (!canComment) return res.status(403).json({ message: "Comments are disabled for this link" });
+
+      const { message, metadata } = req.body || {};
+      if (typeof message !== "string" || message.trim().length === 0) {
+        return res.status(400).json({ message: "Field 'message' is required." });
+      }
+
+      let threadId = access.thread_id as string | null;
+      const dbClient = await pool.connect();
+      try {
+        await dbClient.query("BEGIN");
+
+        if (!threadId) {
+          const threadInsert = await dbClient.query(
+            `INSERT INTO content_threads (
+               tenant_id, client_id, post_id, context_type, task_title, stage_tag, created_by
+             )
+             VALUES ($1, $2, $3, 'content', 'Feedback do cliente', 'client_feedback', NULL)
+             RETURNING id`,
+            [access.tenant_id, access.client_id, access.post_id ?? null]
+          );
+          threadId = threadInsert.rows[0].id;
+
+          await dbClient.query(
+            `UPDATE external_access_tokens
+             SET thread_id = $1
+             WHERE id = $2`,
+            [threadId, access.id]
+          );
+        }
+
+        const insertResult = await dbClient.query(
+          `INSERT INTO content_messages (tenant_id, thread_id, author_id, author_role, message, metadata)
+           VALUES ($1, $2, NULL, 'client', $3, $4)
+           RETURNING id, thread_id, author_role, message, metadata, created_at`,
+          [access.tenant_id, threadId, message.trim(), metadata ? JSON.stringify(metadata) : '{}']
+        );
+
+        await dbClient.query(
+          `UPDATE content_threads SET updated_at = NOW() WHERE id = $1 AND tenant_id = $2`,
+          [threadId, access.tenant_id]
+        );
+
+        await dbClient.query("COMMIT");
+
+        await broadcastTenantWorkspaceEvent(access.tenant_id, {
+          type: "workspace:message-created",
+          tenantId: access.tenant_id,
+          clientId: access.client_id,
+          threadId,
+          messageId: String(insertResult.rows[0].id),
+          authorRole: "client",
+        });
+
+        return res.status(201).json(insertResult.rows[0]);
+      } catch (error) {
+        await dbClient.query("ROLLBACK");
+        throw error;
+      } finally {
+        dbClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error posting public message:", error);
+      res.status(500).json({ message: error.message || "Failed to post public message" });
+    }
+  });
+
+  // Public portal: approve/request adjustment by status update
+  app.put("/api/public/access/:token/status", async (req, res) => {
+    try {
+      const access = await resolveExternalTokenAccess(req.params.token);
+      if (!access) return res.status(404).json({ message: "Invalid or expired access token" });
+
+      const canUpdateStatus = Boolean(access.permissions?.can_update_status ?? true);
+      if (!canUpdateStatus) return res.status(403).json({ message: "Status update is disabled for this link" });
+
+      if (!access.post_id) {
+        return res.status(400).json({ message: "This link is not associated with a post" });
+      }
+
+      const { status: nextStatus } = req.body || {};
+      if (typeof nextStatus !== "string") {
+        return res.status(400).json({ message: "Field 'status' is required." });
+      }
+      if (!Object.prototype.hasOwnProperty.call(STATUS_TRANSITIONS, nextStatus)) {
+        return res.status(400).json({ message: `Invalid status '${nextStatus}'.` });
+      }
+
+      const dbClient = await pool.connect();
+      try {
+        await dbClient.query("BEGIN");
+
+        const currentResult = await dbClient.query(
+          `SELECT id, client_id, status, stage_tag, scheduled_for
+           FROM posts
+           WHERE id = $1 AND tenant_id = $2
+           FOR UPDATE`,
+          [access.post_id, access.tenant_id]
+        );
+
+        const currentPost = currentResult.rows[0];
+        if (!currentPost) {
+          await dbClient.query("ROLLBACK");
+          return res.status(404).json({ message: "Post not found" });
+        }
+
+        const allowed = STATUS_TRANSITIONS[String(currentPost.status)] || [];
+        if (!allowed.includes(nextStatus)) {
+          await dbClient.query("ROLLBACK");
+          return res.status(400).json({
+            message: `Invalid transition: ${currentPost.status} -> ${nextStatus}. Allowed: ${allowed.join(", ") || "none"}.`,
+          });
+        }
+
+        const updateResult = await dbClient.query(
+          `UPDATE posts
+           SET status = $1,
+               status_updated_at = NOW(),
+               status_updated_by = NULL,
+               updated_at = NOW()
+           WHERE id = $2 AND tenant_id = $3
+           RETURNING id, client_id, status, stage_tag, scheduled_for, updated_at`,
+          [nextStatus, access.post_id, access.tenant_id]
+        );
+
+        await dbClient.query(
+          `INSERT INTO post_status_history (tenant_id, post_id, from_status, to_status, changed_by)
+           VALUES ($1, $2, $3, $4, NULL)`,
+          [access.tenant_id, access.post_id, currentPost.status, nextStatus]
+        );
+
+        await dbClient.query("COMMIT");
+
+        const updated = updateResult.rows[0];
+        await broadcastTenantWorkspaceEvent(access.tenant_id, {
+          type: "workspace:post-updated",
+          tenantId: access.tenant_id,
+          clientId: String(updated.client_id),
+          postId: String(updated.id),
+          status: updated.status,
+          stageTag: updated.stage_tag,
+          scheduledFor: updated.scheduled_for,
+        });
+
+        return res.json(updated);
+      } catch (error) {
+        await dbClient.query("ROLLBACK");
+        throw error;
+      } finally {
+        dbClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error updating status from public portal:", error);
+      res.status(500).json({ message: error.message || "Failed to update status" });
     }
   });
 
@@ -1216,10 +2031,13 @@ export async function registerRoutes(
             p.content,
             p.status,
             p.generated_by,
+            (to_jsonb(p) ->> 'scheduled_for')::timestamptz AS scheduled_for,
+            COALESCE(to_jsonb(p) ->> 'stage_tag', 'draft') AS stage_tag,
+            COALESCE((to_jsonb(p) ->> 'kanban_order')::int, 0) AS kanban_order,
             p.created_at,
             p.updated_at,
-            p.status_updated_at,
-            p.status_updated_by,
+            (to_jsonb(p) ->> 'status_updated_at')::timestamptz AS status_updated_at,
+            to_jsonb(p) ->> 'status_updated_by' AS status_updated_by,
             c.name AS client_name,
             cr.id AS creative_id
           FROM posts p
@@ -1257,6 +2075,7 @@ export async function registerRoutes(
       try {
         const { rows } = await pgClient.query(
           `SELECT id, client_id, title, content, channels, status, generated_by,
+                  scheduled_for, stage_tag, kanban_order,
                   created_at, updated_at, status_updated_at, status_updated_by
            FROM posts WHERE id=$1 AND tenant_id=$2`,
           [req.params.postId, tenantId]
@@ -1318,7 +2137,9 @@ export async function registerRoutes(
 
         const contentText = String(post.content || '').trim();
         const normalized = contentText.replace(/\r/g, '');
-        const matches = [...normalized.matchAll(/(?:^|\n)Slide\s*(\d+)\s*:\s*([^\n]+)\n?([^\n]*)/gim)];
+        const matches = Array.from(
+          normalized.matchAll(/(?:^|\n)Slide\s*(\d+)\s*:\s*([^\n]+)\n?([^\n]*)/gim)
+        );
 
         const parsedSlides = matches
           .map((m) => ({
@@ -1381,7 +2202,7 @@ export async function registerRoutes(
       const tenantId = requireTenantId(req, res);
       if (!tenantId) return;
 
-      const { title, content, status } = req.body;
+      const { title, content, status, scheduled_for, stage_tag, kanban_order } = req.body;
       if (status !== undefined) {
         return res.status(400).json({
           message: "Use PUT /api/posts/:postId/status para alterar status com validação de fluxo.",
@@ -1390,9 +2211,15 @@ export async function registerRoutes(
       const pgClient = await getClientForUser(req.userId);
       try {
         const { rows } = await pgClient.query(
-          `UPDATE posts SET title=COALESCE($1,title), content=COALESCE($2,content), updated_at=NOW()
-           WHERE id=$3 AND tenant_id=$4 RETURNING *`,
-          [title, content, req.params.postId, tenantId]
+          `UPDATE posts
+           SET title=COALESCE($1,title),
+               content=COALESCE($2,content),
+               scheduled_for=COALESCE($3, scheduled_for),
+               stage_tag=COALESCE($4, stage_tag),
+               kanban_order=COALESCE($5, kanban_order),
+               updated_at=NOW()
+           WHERE id=$6 AND tenant_id=$7 RETURNING *`,
+          [title, content, scheduled_for, stage_tag, kanban_order, req.params.postId, tenantId]
         );
         if (!rows[0]) return res.status(404).json({ message: "Post not found" });
         res.json(rows[0]);
@@ -1424,6 +2251,7 @@ export async function registerRoutes(
 
         const currentPostResult = await pgClient.query(
           `SELECT id, client_id, title, content, channels, status, generated_by,
+                  scheduled_for, stage_tag, kanban_order,
                   created_at, updated_at, status_updated_at, status_updated_by
            FROM posts WHERE id=$1 AND tenant_id=$2 FOR UPDATE`,
           [req.params.postId, tenantId]
@@ -1453,6 +2281,7 @@ export async function registerRoutes(
                updated_at = NOW()
            WHERE id = $3 AND tenant_id = $4
            RETURNING id, client_id, title, content, channels, status, generated_by,
+                     scheduled_for, stage_tag, kanban_order,
                      created_at, updated_at, status_updated_at, status_updated_by`,
           [nextStatus, req.userId, req.params.postId, tenantId]
         );
@@ -1472,6 +2301,16 @@ export async function registerRoutes(
         );
 
         await pgClient.query("COMMIT");
+
+        await broadcastTenantWorkspaceEvent(tenantId, {
+          type: "workspace:post-updated",
+          tenantId,
+          clientId: String(updateResult.rows[0].client_id),
+          postId: String(updateResult.rows[0].id),
+          status: updateResult.rows[0].status,
+          stageTag: updateResult.rows[0].stage_tag,
+          scheduledFor: updateResult.rows[0].scheduled_for,
+        });
 
         return res.json({
           ...updateResult.rows[0],

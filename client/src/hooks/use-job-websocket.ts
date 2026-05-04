@@ -12,6 +12,8 @@ export type JobEventType =
   | 'agent:error'
   | 'job:complete'
   | 'job:failed'
+  | 'workspace:post-updated'
+  | 'workspace:message-created'
   | 'connection:established';
 
 export interface JobEvent {
@@ -24,6 +26,13 @@ export interface JobEvent {
   summary?: string;
   error?: string;
   postId?: string;
+  clientId?: string;
+  threadId?: string;
+  messageId?: string;
+  authorRole?: 'team' | 'client';
+  status?: string;
+  stageTag?: string;
+  scheduledFor?: string | null;
   tenantId?: string;
 }
 

@@ -1,7 +1,16 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
 
-export type LibraryPostStatus = "draft" | "ready_review" | "approved" | "rejected" | "published";
+export type LibraryPostStatus =
+  | "draft"
+  | "in_production"
+  | "needs_adjustment"
+  | "ready_review"
+  | "in_approval"
+  | "approved"
+  | "scheduled"
+  | "published"
+  | "rejected";
 export type LibraryPeriod = "all" | "today" | "week" | "month";
 
 export interface LibraryPostItem {
@@ -12,6 +21,9 @@ export interface LibraryPostItem {
   content: string | null;
   status: LibraryPostStatus;
   generated_by: string | null;
+  scheduled_for?: string | null;
+  stage_tag?: string | null;
+  kanban_order?: number | null;
   created_at: string;
   updated_at: string;
   status_updated_at?: string | null;

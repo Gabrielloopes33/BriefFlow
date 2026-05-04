@@ -9,7 +9,24 @@ export type JobEvent =
   | { type: 'agent:complete'; jobId: string; nodeId: string; summary: string; tenantId: string }
   | { type: 'agent:error'; jobId: string; nodeId: string; error: string; tenantId: string }
   | { type: 'job:complete'; jobId: string; postId: string; tenantId: string }
-  | { type: 'job:failed'; jobId: string; error: string; tenantId: string };
+  | { type: 'job:failed'; jobId: string; error: string; tenantId: string }
+  | {
+      type: 'workspace:post-updated';
+      tenantId: string;
+      clientId: string;
+      postId: string;
+      status?: string;
+      stageTag?: string;
+      scheduledFor?: string | null;
+    }
+  | {
+      type: 'workspace:message-created';
+      tenantId: string;
+      clientId: string;
+      threadId: string;
+      messageId: string;
+      authorRole: 'team' | 'client';
+    };
 
 /**
  * Payload genérico enviado pelo WebSocket

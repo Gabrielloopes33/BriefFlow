@@ -51,9 +51,14 @@ export function PostFilters({ clients, value, onChange }: Props) {
           <SelectContent>
             <SelectItem value="all">Todos os status</SelectItem>
             <SelectItem value="draft">Rascunho</SelectItem>
+            <SelectItem value="in_production">Em produção</SelectItem>
+            <SelectItem value="needs_adjustment">Ajuste</SelectItem>
             <SelectItem value="ready_review">Em revisão</SelectItem>
+            <SelectItem value="in_approval">Em aprovação</SelectItem>
             <SelectItem value="approved">Aprovado</SelectItem>
+            <SelectItem value="scheduled">Agendado</SelectItem>
             <SelectItem value="published">Publicado</SelectItem>
+            <SelectItem value="rejected">Rejeitado</SelectItem>
           </SelectContent>
         </Select>
 

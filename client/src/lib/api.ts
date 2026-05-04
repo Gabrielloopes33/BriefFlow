@@ -1,4 +1,4 @@
-import { supabase } from "@shared/supabase";
+import { getSessionToken, getTenantId } from "@/lib/auth-session";
 
 interface ApiOptions extends RequestInit {
   skipAuth?: boolean;
@@ -9,9 +9,22 @@ interface ApiError {
   status: number;
 }
 
+async function parseJsonSafe<T = unknown>(response: Response): Promise<T> {
+  if (response.status === 204) {
+    return null as T;
+  }
+
+  const text = await response.text();
+  if (!text) {
+    return null as T;
+  }
+
+  return JSON.parse(text) as T;
+}
+
 /**
  * Helper para fazer requisições autenticadas à API
- * Automaticamente adiciona o token do Supabase no header Authorization
+ * Automaticamente adiciona o token de sessão da aplicação no header Authorization
  */
 export async function apiFetch(url: string, options: ApiOptions = {}): Promise<Response> {
   const { skipAuth = false, ...fetchOptions } = options;
@@ -24,7 +37,7 @@ export async function apiFetch(url: string, options: ApiOptions = {}): Promise<R
 
   // Attach tenant context for multi-tenant backend routes.
   const tenantFromEnv = (import.meta as any)?.env?.VITE_TENANT_ID as string | undefined;
-  const tenantFromStorage = typeof window !== "undefined" ? localStorage.getItem("bf_tenant_id") || undefined : undefined;
+  const tenantFromStorage = typeof window !== "undefined" ? getTenantId() || undefined : undefined;
   const tenantId = tenantFromEnv || tenantFromStorage || "00000000-0000-0000-0000-000000000010";
   if (!headers["x-tenant-id"] && tenantId) {
     headers["x-tenant-id"] = tenantId;
@@ -32,8 +45,7 @@ export async function apiFetch(url: string, options: ApiOptions = {}): Promise<R
 
   // Adiciona token de autenticação (exceto se skipAuth = true)
   if (!skipAuth) {
-    const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token;
+    const token = typeof window !== "undefined" ? getSessionToken() : null;
     
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
@@ -80,7 +92,7 @@ export async function apiFetch(url: string, options: ApiOptions = {}): Promise<R
  */
 export async function apiGet<T = unknown>(url: string, options: ApiOptions = {}): Promise<T> {
   const response = await apiFetch(url, { ...options, method: "GET" });
-  return response.json() as Promise<T>;
+  return parseJsonSafe<T>(response);
 }
 
 /**
@@ -92,7 +104,7 @@ export async function apiPost<T = unknown>(url: string, data: unknown, options: 
     method: "POST",
     body: JSON.stringify(data),
   });
-  return response.json() as Promise<T>;
+  return parseJsonSafe<T>(response);
 }
 
 /**
@@ -104,7 +116,7 @@ export async function apiPut<T = unknown>(url: string, data: unknown, options: A
     method: "PUT",
     body: JSON.stringify(data),
   });
-  return response.json() as Promise<T>;
+  return parseJsonSafe<T>(response);
 }
 
 /**
@@ -116,7 +128,7 @@ export async function apiPatch<T = unknown>(url: string, data: unknown, options:
     method: "PATCH",
     body: JSON.stringify(data),
   });
-  return response.json() as Promise<T>;
+  return parseJsonSafe<T>(response);
 }
 
 /**
@@ -124,7 +136,7 @@ export async function apiPatch<T = unknown>(url: string, data: unknown, options:
  */
 export async function apiDelete<T = unknown>(url: string, options: ApiOptions = {}): Promise<T> {
   const response = await apiFetch(url, { ...options, method: "DELETE" });
-  return response.json() as Promise<T>;
+  return parseJsonSafe<T>(response);
 }
 
 /**

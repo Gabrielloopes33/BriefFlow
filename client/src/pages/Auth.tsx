@@ -6,12 +6,14 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, ArrowRight, CheckCircle2 } from 'lucide-react';
-import { supabase } from '@shared/supabase';
+import { apiPost } from '@/lib/api';
+import { saveAuthSession } from '@/lib/auth-session';
 
 type AuthMode = 'login' | 'signup' | 'forgot-password';
 
 export default function AuthPage() {
   const [mode, setMode] = useState<AuthMode>('login');
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -26,19 +28,26 @@ export default function AuthPage() {
     setSuccess('');
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const data = await apiPost<{
+        user: { id: string; email: string; fullName?: string | null };
+        tenantId: string;
+        session: { token: string; expiresAt: string };
+      }>('/api/auth/login', {
         email,
         password,
       });
 
-      if (error) throw error;
+      saveAuthSession({
+        token: data.session.token,
+        expiresAt: data.session.expiresAt,
+        tenantId: data.tenantId,
+        user: data.user,
+      });
 
-      if (data.session) {
-        setSuccess('Login realizado com sucesso!');
-        setTimeout(() => {
-          setLocation('/dashboard');
-        }, 1000);
-      }
+      setSuccess('Login realizado com sucesso!');
+      setTimeout(() => {
+        setLocation('/dashboard');
+      }, 600);
     } catch (err: any) {
       setError(err.message || 'Erro ao fazer login');
     } finally {
@@ -53,20 +62,27 @@ export default function AuthPage() {
     setSuccess('');
 
     try {
-      const { data, error } = await supabase.auth.signUp({
+      const data = await apiPost<{
+        user: { id: string; email: string; fullName?: string | null };
+        tenantId: string;
+        session: { token: string; expiresAt: string };
+      }>('/api/auth/signup', {
         email,
         password,
+        fullName,
       });
 
-      if (error) throw error;
+      saveAuthSession({
+        token: data.session.token,
+        expiresAt: data.session.expiresAt,
+        tenantId: data.tenantId,
+        user: data.user,
+      });
 
-      setSuccess('Cadastro realizado! Verifique seu email para confirmar.');
-      
-      if (data.session) {
-        setTimeout(() => {
-          setLocation('/dashboard');
-        }, 1000);
-      }
+      setSuccess('Conta criada com sucesso!');
+      setTimeout(() => {
+        setLocation('/dashboard');
+      }, 600);
     } catch (err: any) {
       setError(err.message || 'Erro ao criar conta');
     } finally {
@@ -81,13 +97,7 @@ export default function AuthPage() {
     setSuccess('');
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/auth/reset-password`,
-      });
-
-      if (error) throw error;
-
-      setSuccess('Email de recuperação enviado! Verifique sua caixa de entrada.');
+      setSuccess('Fluxo de recuperação será habilitado na próxima etapa de implementação.');
     } catch (err: any) {
       setError(err.message || 'Erro ao enviar email de recuperação');
     } finally {
@@ -150,6 +160,21 @@ export default function AuthPage() {
                   disabled={loading}
                 />
               </div>
+
+              {mode === 'signup' && (
+                <div className="space-y-2">
+                  <Label htmlFor="fullName">Nome completo</Label>
+                  <Input
+                    id="fullName"
+                    type="text"
+                    placeholder="Seu nome"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    required
+                    disabled={loading}
+                  />
+                </div>
+              )}
 
               {mode !== 'forgot-password' && (
                 <div className="space-y-2">

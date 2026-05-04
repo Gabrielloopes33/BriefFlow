@@ -1,5 +1,10 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { LibraryPostItem, usePostDetail, useUpdatePostStatus } from "@/hooks/use-posts-library";
+import {
+  LibraryPostItem,
+  LibraryPostStatus,
+  usePostDetail,
+  useUpdatePostStatus,
+} from "@/hooks/use-posts-library";
 import { PostStatusBadge } from "@/components/library/PostStatusBadge";
 import { PostStatusActions } from "@/components/library/PostStatusActions";
 import { useToast } from "@/hooks/use-toast";
@@ -21,7 +26,7 @@ export function PostDetailModal({ post, open, onOpenChange }: Props) {
 
   const currentPost = detail ?? post;
 
-  async function handleChangeStatus(nextStatus: any) {
+  async function handleChangeStatus(nextStatus: LibraryPostStatus) {
     try {
       await statusMutation.mutateAsync({ postId: currentPost.id, status: nextStatus });
       toast({ title: "Status atualizado", description: "Fluxo de aprovação atualizado com sucesso." });
@@ -54,6 +59,12 @@ export function PostDetailModal({ post, open, onOpenChange }: Props) {
             onChangeStatus={handleChangeStatus}
             disabled={statusMutation.isPending}
           />
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted-foreground">
+            <span>Tag de etapa: {currentPost.stage_tag || "--"}</span>
+            <span>
+              Agendamento: {currentPost.scheduled_for ? new Date(currentPost.scheduled_for).toLocaleString("pt-BR") : "--"}
+            </span>
+          </div>
         </div>
 
         <div className="max-h-[60vh] overflow-auto rounded-md border border-border/50 bg-secondary/20 p-4">
