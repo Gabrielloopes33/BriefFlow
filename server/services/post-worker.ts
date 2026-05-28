@@ -6,6 +6,7 @@ import { executeGraph, loadDefaultGraph } from '../agents/executor';
 import { createGraphTrace, generateTraceId, finalizeTrace } from '../agents/langfuse-tracer';
 import { createLLMClient, getDefaultModel } from './llm-provider';
 import { broadcastJobEvent } from '../websocket/job-broadcaster';
+import { registerJobAbortController, removeJobAbortController } from './job-abort-registry';
 
 export interface JobRow {
   id: string;
@@ -254,20 +255,29 @@ async function processJob(job: JobRow, pool: Pool) {
           graphName: graphDef.name,
         });
 
-        const result = await executeGraph({
-          jobId: job.id,
-          tenantId: job.tenant_id,
-          clientId: job.client_id,
-          userId: job.user_id,
-          payload: job.payload,
-          pool,
-          onNodeStart: (nodeId) => {
-            console.log(`[post-worker] Graph node started: ${nodeId}`);
-          },
-          onNodeComplete: (nodeId, nodeResult) => {
-            console.log(`[post-worker] Graph node completed: ${nodeId} (${nodeResult.status}, ${nodeResult.latency}ms)`);
-          },
-        });
+        const abortController = new AbortController();
+        registerJobAbortController(job.id, abortController);
+
+        let result: Awaited<ReturnType<typeof executeGraph>>;
+        try {
+          result = await executeGraph({
+            jobId: job.id,
+            tenantId: job.tenant_id,
+            clientId: job.client_id,
+            userId: job.user_id,
+            payload: job.payload,
+            pool,
+            signal: abortController.signal,
+            onNodeStart: (nodeId) => {
+              console.log(`[post-worker] Graph node started: ${nodeId}`);
+            },
+            onNodeComplete: (nodeId, nodeResult) => {
+              console.log(`[post-worker] Graph node completed: ${nodeId} (${nodeResult.status}, ${nodeResult.latency}ms)`);
+            },
+          });
+        } finally {
+          removeJobAbortController(job.id);
+        }
 
         finalizeTrace(trace, result.success ? 'completed' : 'failed', {
           postId: result.postId,
@@ -283,6 +293,9 @@ async function processJob(job: JobRow, pool: Pool) {
         }
       }
     } catch (graphErr: any) {
+      if (String(graphErr?.message || '').toLowerCase().includes('aborted')) {
+        throw graphErr;
+      }
       console.error('[post-worker] Graph execution failed, falling back to linear pipeline:', graphErr.message);
       usedGraph = false;
     }

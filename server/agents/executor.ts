@@ -19,6 +19,7 @@ export interface ExecutionOptions {
   payload: any;
   graphId?: string;
   pool: Pool;
+  signal?: AbortSignal;
   onNodeStart?: (nodeId: string) => void;
   onNodeComplete?: (nodeId: string, result: NodeResult) => void;
 }
@@ -90,6 +91,60 @@ export async function loadDefaultGraph(
     };
   } finally {
     client.release();
+  }
+}
+
+async function loadClientContext(pool: Pool, tenantId: string, clientId: string): Promise<{
+  clientKnowledgeContext: string;
+  clientVisualContext: string;
+}> {
+  const db = await pool.connect();
+  try {
+    const documentsResult = await db.query(
+      `SELECT file_name,
+              file_type,
+              COALESCE(label, file_name) AS label,
+              extraction_status,
+              LEFT(COALESCE(extracted_text, ''), 1200) AS excerpt,
+              created_at
+       FROM client_documents
+       WHERE tenant_id = $1 AND client_id = $2
+       ORDER BY created_at DESC
+       LIMIT 8`,
+      [tenantId, clientId]
+    );
+
+    const visualsResult = await db.query(
+      `SELECT file_name,
+              COALESCE(label, file_name) AS label,
+              public_url,
+              created_at
+       FROM client_moodboard_images
+       WHERE tenant_id = $1 AND client_id = $2
+       ORDER BY display_order ASC, created_at DESC
+       LIMIT 12`,
+      [tenantId, clientId]
+    );
+
+    const documentLines = documentsResult.rows.map((row: any, index: number) => {
+      const excerpt = String(row.excerpt || '').trim();
+      return `${index + 1}. ${row.label} (${row.file_name}, ${row.file_type}, ${row.extraction_status})${excerpt ? `\n  Trecho: ${excerpt}` : ''}`;
+    });
+
+    const visualLines = visualsResult.rows.map((row: any, index: number) => {
+      return `${index + 1}. ${row.label} (${row.file_name})${row.public_url ? `\n  URL: ${row.public_url}` : ''}`;
+    });
+
+    return {
+      clientKnowledgeContext: documentLines.length > 0
+        ? `Use estes arquivos como referência obrigatória de marca, texto e conteúdo. Priorize brandbook, logo, criativos e tom visual acima de defaults genéricos.\n${documentLines.join('\n\n')}`
+        : '',
+      clientVisualContext: visualLines.length > 0
+        ? `Use estas referências visuais como direção de estética, layout, composição e identidade.\n${visualLines.join('\n\n')}`
+        : '',
+    };
+  } finally {
+    db.release();
   }
 }
 
@@ -176,7 +231,7 @@ export async function executeGraph(options: ExecutionOptions): Promise<{
   executionId: string;
   postId?: string;
 }> {
-  const { jobId, tenantId, clientId, userId, payload, graphId, pool, onNodeStart, onNodeComplete } = options;
+  const { jobId, tenantId, clientId, userId, payload, graphId, pool, signal, onNodeStart, onNodeComplete } = options;
 
   // 1. Carrega informações do cliente
   const pgClient = await getClientForUser(userId);
@@ -213,6 +268,9 @@ export async function executeGraph(options: ExecutionOptions): Promise<{
 
   // 3. Cria estado inicial e registro de execução (ANTES da validação para ter executionId)
   const initialState = createInitialState({ jobId, tenantId, clientId, userId, payload, clientInfo });
+  const clientContext = await loadClientContext(pool, tenantId, clientId);
+  initialState.clientKnowledgeContext = clientContext.clientKnowledgeContext;
+  initialState.clientVisualContext = clientContext.clientVisualContext;
   const executionId = await createExecution(pool, { tenantId, graphId: graphDef.id, jobId });
 
   // 2.5 Validação pré-execução: todos os nós têm handlers registrados?
@@ -283,8 +341,11 @@ export async function executeGraph(options: ExecutionOptions): Promise<{
   const graph = buildGraph(graphDef);
   const nodeResultsMap: Record<string, any> = {};
 
-  const result = await graph.execute(initialState, {
+  const executionPromise = graph.execute(initialState, {
     onNodeStart: (nodeId) => {
+      if (signal?.aborted) {
+        throw new Error('Graph execution aborted');
+      }
       const nodeDef = graphDef!.nodes.find((n) => n.id === nodeId);
       broadcastJobEvent(userId, {
         type: 'agent:start',
@@ -324,6 +385,15 @@ export async function executeGraph(options: ExecutionOptions): Promise<{
       onNodeComplete?.(nodeId, nodeResult);
     },
   });
+
+  const result = signal
+    ? await Promise.race([
+        executionPromise,
+        new Promise<never>((_, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('Graph execution aborted')), { once: true });
+        }),
+      ])
+    : await executionPromise;
 
   // 7. Finaliza execução e emite evento final
   console.log(`[executor] Graph execution result: status=${result.status}, draft.title=${result.finalState.draft?.title}, draft.content length=${result.finalState.draft?.content?.length}`);
@@ -397,3 +467,4 @@ export async function executeGraph(options: ExecutionOptions): Promise<{
     postId,
   };
 }
+

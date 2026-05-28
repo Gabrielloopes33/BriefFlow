@@ -3,6 +3,8 @@
  * Persiste entre nós e é rastreável via Langfuse
  */
 
+import type { HtmlSlideConfig } from '@shared/types/html-slide-config';
+
 export interface CrawledContent {
   url: string;
   title: string;
@@ -29,6 +31,8 @@ export interface AgentState {
   clientName: string;
   clientNiche: string;
   clientDescription: string;
+  clientKnowledgeContext?: string;
+  clientVisualContext?: string;
 
   // Resultados dos nós
   sources: CrawledContent[];
@@ -57,7 +61,10 @@ export interface AgentState {
   };
   contentBrief?: string;
   slides?: Array<{ title: string; subtitle: string }>;
+  htmlSlideConfigs?: HtmlSlideConfig[];
+  htmlSlides?: string[];
   imagePrompts?: string[];
+  imageUrls?: string[];
   review: {
     score: number;
     feedback: string;
@@ -105,6 +112,8 @@ export function createInitialState(params: {
     clientName: clientInfo.name,
     clientNiche: clientInfo.niche,
     clientDescription: clientInfo.description,
+    clientKnowledgeContext: '',
+    clientVisualContext: '',
     sources: [],
     research: '',
     draft: { title: '', content: '' },

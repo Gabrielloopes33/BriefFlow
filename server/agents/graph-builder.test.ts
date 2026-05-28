@@ -446,6 +446,29 @@ describe('graph-builder', () => {
       expect(started).toContain('n2');
       expect(started).toHaveLength(2);
     });
+
+    it('should execute graphs whose first node depends on __start__', async () => {
+      const def: AgentGraphDefinition = {
+        id: 'start-edge',
+        tenantId: 't1',
+        name: 'Start Edge',
+        nodes: [
+          { id: 'researcher', agentId: 'a1', type: 'researcher' },
+          { id: 'writer', agentId: 'a2', type: 'writer' },
+        ],
+        edges: [
+          { id: 'e0', from: '__start__', to: 'researcher' },
+          { id: 'e1', from: 'researcher', to: 'writer' },
+        ],
+      };
+
+      const graph = buildGraph(def);
+      const result = await graph.execute(makeState({ clientName: 'Acme' }));
+
+      expect(result.status).toBe('completed');
+      expect(result.finalState.research).toBe('Research for Acme');
+      expect(result.finalState.draft.title).toContain('Research for Acme');
+    });
   });
 
   // ─────────────────────────────────────────────

@@ -22,6 +22,10 @@ export function mergeState(base: AgentState, partial: Partial<AgentState>): Agen
     // Objetos: merge profundo
     creativeId: partial.creativeId ?? base.creativeId,
     analyticsInsights: partial.analyticsInsights ?? base.analyticsInsights,
+    htmlSlideConfigs: partial.htmlSlideConfigs ?? base.htmlSlideConfigs,
+    htmlSlides: partial.htmlSlides ?? base.htmlSlides,
+    imagePrompts: partial.imagePrompts ?? base.imagePrompts,
+    imageUrls: partial.imageUrls ?? base.imageUrls,
     draft: partial.draft
       ? { ...base.draft, ...partial.draft }
       : base.draft,

@@ -5,11 +5,26 @@
 
 import { createLLMClient, getDefaultModel } from '../../services/llm-provider';
 import type { AgentState } from '../state';
+import { buildClientContextBlock } from '../prompt-context';
 
 interface CarouselWriterConfig {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+}
+
+function stripVisualNoise(text: string): string {
+  return text
+    .replace(/\B#[\wÀ-ÿ-]+/g, ' ')
+    .replace(/[\*_`~]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function clampWords(text: string, maxWords: number): string {
+  const words = stripVisualNoise(text).split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return words.join(' ');
+  return words.slice(0, maxWords).join(' ');
 }
 
 export async function carouselWriterNode(
@@ -26,6 +41,7 @@ export async function carouselWriterNode(
 
   const slideCount = (state.payload?.slide_count || state.payload?.slidesCount || 5);
   const safeCount = Math.min(10, Math.max(1, slideCount));
+  const clientContext = buildClientContextBlock(state);
 
   const systemPrompt = `You are an expert social media strategist specialized in Instagram carousels that drive saves, shares, and engagement. Your goal is to create carousel copy that builds audience, drives engagement, and supports business goals.
 
@@ -60,6 +76,8 @@ Weave these throughout — don't force all of them:
 - Active voice: "We generate reports" not "Reports are generated"
 - No exclamation points in titles — let the idea carry the energy
 - Each slide must work as a standalone thought
+- Never use hashtags in slide text
+- Never use markdown markers like #, **, *, _, or backticks in title/subtitle
 
 ## Output Format
 
@@ -77,7 +95,7 @@ Language: ${state.language}
 Channels: ${state.channels.join(', ')}
 Number of slides: ${safeCount}
 
-${state.contentBrief ? `## Content Strategy Brief\n${state.contentBrief}\n\n` : `Topic: ${state.titleHint}\n\n`}${state.research ? `## Research Insights\n${state.research}\n\n` : ''}${state.analyticsInsights?.dataSource !== 'empty' ? `## Client Performance Insights\n${state.analyticsInsights!.insightSummary}\nTop formats: ${state.analyticsInsights!.topFormats.join(', ')}\nBest posting times: ${state.analyticsInsights!.bestPostingHours.join(', ')}\n\n` : ''}${state.references?.length ? `## Relevant References\n${state.references.map(r => `- ${r.title}: ${r.summary} (Angle: ${r.angle})`).join('\n')}\n\n` : ''}
+${state.contentBrief ? `## Content Strategy Brief\n${state.contentBrief}\n\n` : `Topic: ${state.titleHint}\n\n`}${clientContext}${state.research ? `## Research Insights\n${state.research}\n\n` : ''}${state.analyticsInsights?.dataSource !== 'empty' ? `## Client Performance Insights\n${state.analyticsInsights!.insightSummary}\nTop formats: ${state.analyticsInsights!.topFormats.join(', ')}\nBest posting times: ${state.analyticsInsights!.bestPostingHours.join(', ')}\n\n` : ''}${state.references?.length ? `## Relevant References\n${state.references.map(r => `- ${r.title}: ${r.summary} (Angle: ${r.angle})`).join('\n')}\n\n` : ''}
 Create ${safeCount} slides for an Instagram carousel. Return ONLY the JSON array, no other text.`;
 
   try {
@@ -105,13 +123,14 @@ Create ${safeCount} slides for an Instagram carousel. Return ONLY the JSON array
       throw new Error('LLM returned non-array for slides');
     }
 
+    const oneSlideMode = safeCount === 1;
     const slides = parsed.map((item: any, index: number) => ({
-      title: String(item?.title || item?.headline || `Slide ${index + 1}`).slice(0, 120),
-      subtitle: String(item?.subtitle || item?.body || '').slice(0, 420),
+      title: clampWords(String(item?.title || item?.headline || `Slide ${index + 1}`), oneSlideMode ? 16 : 12).slice(0, 120),
+      subtitle: clampWords(String(item?.subtitle || item?.body || ''), oneSlideMode ? 18 : 45).slice(0, 420),
     })).slice(0, safeCount);
 
     // Garante CTA no último slide
-    if (slides.length > 0) {
+    if (slides.length > 0 && !oneSlideMode) {
       const last = slides[slides.length - 1];
       const hasCTA = /salve|compartilhe|siga|comente|curta|link|bio|clique/i.test(last.subtitle);
       if (!hasCTA) {

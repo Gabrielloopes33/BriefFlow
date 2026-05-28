@@ -8,6 +8,7 @@ import { selectProvider } from '../../services/crawler-provider';
 import type { CrawlSource } from '../../services/crawler-provider';
 import type { AgentState } from '../state';
 import { getClientForUser } from '../../pg-pool';
+import { buildClientContextBlock } from '../prompt-context';
 
 interface ReferencesConfig {
   model?: string;
@@ -35,7 +36,10 @@ export async function referencesNode(
     const pgClient = await getClientForUser(state.userId);
     try {
       const { rows } = await pgClient.query(
-        `SELECT url, source_type, title FROM sources
+        `SELECT url,
+                COALESCE(type, 'blog') AS source_type,
+                name AS title
+           FROM sources
          WHERE client_id = $1 AND is_active = true
          ORDER BY created_at DESC`,
         [state.clientId]
@@ -103,6 +107,7 @@ export async function referencesNode(
     content: c.content_text ? c.content_text.slice(0, 800) : '',
     type: c.source_type || 'blog',
   }));
+  const clientContext = buildClientContextBlock(state);
 
   const systemPrompt = `Você é um curador de conteúdo especializado. Analise as referências fornecidas e selecione as mais relevantes para o objetivo do post.
 
@@ -124,6 +129,8 @@ Tema sugerido: ${state.titleHint}
 
 Conteúdos das fontes do cliente:
 ${JSON.stringify(contextBlocks, null, 2)}
+
+${clientContext}
 
 Selecione as ${maxReferences} referências mais relevantes e extraia ângulos de conteúdo.`;
 

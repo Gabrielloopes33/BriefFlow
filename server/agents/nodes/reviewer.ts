@@ -5,6 +5,7 @@
 
 import { createLLMClient, getDefaultModel } from '../../services/llm-provider';
 import type { AgentState } from '../state';
+import { buildClientContextBlock } from '../prompt-context';
 
 interface ReviewerConfig {
   model?: string;
@@ -25,6 +26,7 @@ export async function reviewerNode(
     maxTokens = 1024,
     minScore = 7,
   } = config;
+  const clientContext = buildClientContextBlock(state);
 
   const systemPrompt = `Você é um editor de conteúdo sênior. Avalie o post segundo critérios objetivos.
 Responda APENAS em formato JSON com esta estrutura:
@@ -46,6 +48,8 @@ Objetivo: ${state.goal}
 Tom esperado: ${state.tone}
 Idioma: ${state.language}
 Canais: ${state.channels.join(', ')}
+
+${clientContext}
 
 TÍTULO DO POST:
 ${state.draft.title}

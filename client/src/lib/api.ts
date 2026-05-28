@@ -28,12 +28,18 @@ async function parseJsonSafe<T = unknown>(response: Response): Promise<T> {
  */
 export async function apiFetch(url: string, options: ApiOptions = {}): Promise<Response> {
   const { skipAuth = false, ...fetchOptions } = options;
+  const isFormDataBody =
+    typeof FormData !== "undefined" && fetchOptions.body instanceof FormData;
   
   // Prepara headers
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...((fetchOptions.headers as Record<string, string>) || {}),
   };
+
+  // Only set JSON content type when body is not multipart form-data.
+  if (!isFormDataBody && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
 
   // Attach tenant context for multi-tenant backend routes.
   const tenantFromEnv = (import.meta as any)?.env?.VITE_TENANT_ID as string | undefined;

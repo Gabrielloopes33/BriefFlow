@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,11 +8,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Badge } from "@/components/ui/badge";
 import { SwipeableCard } from "@/components/SwipeableCard";
 import { useSources, useCreateSource, useDeleteSource } from "@/hooks/use-sources";
+import { useClientMoodboard, useUploadMoodboardImages } from "@/hooks/use-client-moodboard";
+import { useUploadDocument } from "@/hooks/use-client-documents";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Globe, ExternalLink, Rss, Newspaper, Loader2 } from "lucide-react";
+import { Plus, Globe, ExternalLink, Rss, Newspaper, Loader2, Upload, File, ImagePlus, X } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { DocumentList } from "@/components/knowledge/DocumentList";
+import { MoodboardGrid } from "@/components/moodboard/MoodboardGrid";
+import { cn } from "@/lib/utils";
 
 const sourceSchema = z.object({
   name: z.string().min(1, "Nome é obrigatório"),
@@ -22,15 +27,33 @@ const sourceSchema = z.object({
 
 type SourceFormData = z.infer<typeof sourceSchema>;
 
+const DOCUMENT_EXTS = [".pdf", ".md", ".txt", ".docx", ".csv", ".json"];
+const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
+
+function isDocumentFile(file: File): boolean {
+  const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+  return DOCUMENT_EXTS.includes(ext);
+}
+
+function isImageFile(file: File): boolean {
+  const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+  return IMAGE_EXTS.includes(ext);
+}
+
 interface SourcesTabProps {
   clientId: string;
 }
 
 export function SourcesTab({ clientId }: SourcesTabProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const { data: sources, isLoading } = useSources(clientId);
   const createSource = useCreateSource();
   const deleteSource = useDeleteSource();
+  const { data: moodboardImages } = useClientMoodboard(clientId);
+  const uploadDocument = useUploadDocument(clientId);
+  const uploadMoodboardImages = useUploadMoodboardImages(clientId);
   const { toast } = useToast();
 
   const form = useForm<SourceFormData>({
@@ -53,6 +76,56 @@ export function SourcesTab({ clientId }: SourcesTabProps) {
 
   const handleDeleteSource = (sourceId: string) => {
     deleteSource.mutate(sourceId);
+  };
+
+  const selectedSummary = useMemo(() => {
+    const documents = selectedFiles.filter(isDocumentFile).length;
+    const images = selectedFiles.filter(isImageFile).length;
+    return { documents, images };
+  }, [selectedFiles]);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []).filter((file) => isDocumentFile(file) || isImageFile(file));
+    if (files.length > 0) {
+      setSelectedFiles((prev) => [...prev, ...files].slice(0, 20));
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter((file) => isDocumentFile(file) || isImageFile(file));
+    if (files.length > 0) {
+      setSelectedFiles((prev) => [...prev, ...files].slice(0, 20));
+    }
+  };
+
+  const handleUpload = async () => {
+    if (selectedFiles.length === 0) return;
+
+    const documentFiles = selectedFiles.filter(isDocumentFile);
+    const imageFiles = selectedFiles.filter(isImageFile);
+
+    try {
+      for (const file of documentFiles) {
+        await uploadDocument.mutateAsync(file);
+      }
+      if (imageFiles.length > 0) {
+        await uploadMoodboardImages.mutateAsync(imageFiles);
+      }
+
+      setSelectedFiles([]);
+      toast({
+        title: "Arquivos enviados",
+        description: "Os arquivos foram adicionados às fontes do cliente.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Falha no upload",
+        description: error?.message || "Não foi possível enviar os arquivos.",
+        variant: "destructive",
+      });
+    }
   };
 
   const getSourceIcon = (type: string) => {
@@ -97,7 +170,7 @@ export function SourcesTab({ clientId }: SourcesTabProps) {
             Fontes {sources && `(${sources.length})`}
           </h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Gerencie as fontes de conteúdo para este cliente
+            Gerencie links e arquivos de referência para este cliente
           </p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -161,6 +234,89 @@ export function SourcesTab({ clientId }: SourcesTabProps) {
         </Dialog>
       </div>
 
+      <Card className="border-border/50 bg-card/80">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">Upload único de fontes</CardTitle>
+          <CardDescription>
+            Envie PDFs, MD, DOCX e outros arquivos de texto, ou imagens de referência, no mesmo ponto de entrada.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div
+            className={cn(
+              "border-2 border-dashed rounded-xl p-6 text-center transition-colors cursor-pointer",
+              dragOver ? "border-primary bg-primary/5" : "border-border bg-card hover:border-primary/50"
+            )}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            onClick={() => document.getElementById("sources-upload")?.click()}
+          >
+            <Upload className="w-7 h-7 mx-auto text-muted-foreground mb-2" />
+            <p className="text-sm font-medium">Arraste arquivos ou clique para selecionar</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              PDFs, MD, TXT, DOCX, CSV, JSON, JPG, PNG, WEBP, GIF
+            </p>
+            <input
+              id="sources-upload"
+              type="file"
+              className="hidden"
+              accept=".pdf,.md,.txt,.docx,.csv,.json,.jpg,.jpeg,.png,.webp,.gif"
+              multiple
+              onChange={handleFileSelect}
+            />
+          </div>
+
+          {selectedFiles.length > 0 ? (
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{selectedFiles.length} arquivo(s) selecionado(s)</span>
+                <span>{selectedSummary.documents} texto(s) e {selectedSummary.images} imagem(ns)</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {selectedFiles.map((file, index) => {
+                  const isImage = isImageFile(file);
+                  return (
+                    <div key={`${file.name}-${index}`} className="flex items-center gap-2 rounded-full border bg-secondary/40 px-3 py-1 text-xs">
+                      <span className="inline-flex items-center gap-1">
+                        {isImage ? <ImagePlus className="w-3 h-3" /> : <File className="w-3 h-3" />}
+                        {file.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedFiles((prev) => prev.filter((_, idx) => idx !== index));
+                        }}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={handleUpload} disabled={uploadDocument.isPending || uploadMoodboardImages.isPending} className="flex-1">
+                  {(uploadDocument.isPending || uploadMoodboardImages.isPending) ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Upload className="w-4 h-4 mr-2" />
+                  )}
+                  {(uploadDocument.isPending || uploadMoodboardImages.isPending) ? "Enviando..." : "Enviar para fontes"}
+                </Button>
+                <Button variant="outline" onClick={() => setSelectedFiles([])} disabled={uploadDocument.isPending || uploadMoodboardImages.isPending}>
+                  Limpar
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
       {sources && sources.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {sources.map((source) => (
@@ -216,6 +372,26 @@ export function SourcesTab({ clientId }: SourcesTabProps) {
           </Button>
         </Card>
       )}
+
+      <div className="space-y-3 pt-2 border-t border-border/50">
+        <div>
+          <h3 className="text-lg font-medium">Arquivos de referência</h3>
+          <p className="text-sm text-muted-foreground mt-1">
+            Envie PDF, MD, DOCX, TXT, CSV ou JSON para complementar as fontes deste cliente.
+          </p>
+        </div>
+        <DocumentList clientId={clientId} showUpload={false} />
+      </div>
+
+      <div className="space-y-3 pt-2 border-t border-border/50">
+        <div>
+          <h3 className="text-lg font-medium">Referências visuais</h3>
+          <p className="text-sm text-muted-foreground mt-1">
+            Logos, criativos e imagens de inspiração alimentam a direção visual do agente.
+          </p>
+        </div>
+        <MoodboardGrid clientId={clientId} showUpload={false} />
+      </div>
     </div>
   );
 }

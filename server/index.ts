@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import cors from "cors";
+import fileUpload from "express-fileupload";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -8,6 +9,8 @@ import { swaggerUi, swaggerSpec } from "./swagger-simple";
 import { authMiddleware } from "./middleware/auth";
 import { registerAllNodes } from "./agents/nodes"; // Registra todos os nós do grafo
 import { setupWebSocketServer } from "./websocket/ws-server"; // WebSocket server
+import { pool } from "./pg-pool";
+import { startJobCleanup } from "./services/job-cleanup";
 
 const app = express();
 const httpServer = createServer(app);
@@ -20,13 +23,19 @@ declare module "http" {
 
 app.use(
   express.json({
+    limit: "5mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "5mb" }));
+app.use(fileUpload({
+  limits: { fileSize: 50 * 1024 * 1024 },
+  abortOnLimit: true,
+  useTempFiles: false,
+}));
 
 // CORS Configuration
 const corsOptions = {
@@ -112,6 +121,7 @@ app.use((req, res, next) => {
 
   // Inicializa WebSocket server no httpServer existente
   setupWebSocketServer(httpServer);
+  startJobCleanup(pool);
 
   await registerRoutes(httpServer, app);
 

@@ -4,17 +4,42 @@ import { randomUUID } from 'crypto';
 import { createLLMClient, getDefaultModel, isLLMConfigured } from './llm-provider';
 import { executeGraph, loadDefaultGraph } from '../agents/executor';
 import type { AgentState } from '../agents/state';
+import { registerJobAbortController, removeJobAbortController } from './job-abort-registry';
 
 interface GeneratedSlideCopy {
   title: string;
   subtitle: string;
 }
 
+const ANTI_TEXT_NEGATIVE_PROMPT =
+  'text, letters, words, typography, subtitles, captions, watermark, logo, signature, signage, ui text, readable characters, poster, billboard';
+
+export type ImageModelPreference = 'schnell' | 'dev';
+
+const TEXT_RISK_PATTERN = /\b(quote|quotes|testimonial|testimonials|screen|screens|monitor|monitors|dashboard|dashboards|ui|interface|interfaces|data visualization|data visualizations|graph|graphs|chart|charts|whiteboard|whiteboards|note|notes|document|documents|paperwork|poster|posters|billboard|billboards|signage|caption|captions|subtitle|subtitles|logo|logos|watermark|watermarks)\b/i;
+
 interface SlideTextLayout {
   title: string;
   subtitle: string;
   position?: string;
   alignment?: 'left' | 'center' | 'right';
+}
+
+function resolveImageDimensions(canvasWidth = 1080, canvasHeight = 1080): {
+  width: number;
+  height: number;
+  openAiSize: '1024x1024' | '1024x1536' | '1536x1024';
+} {
+  const width = Math.max(512, Math.min(2048, Math.round(canvasWidth)));
+  const height = Math.max(512, Math.min(2048, Math.round(canvasHeight)));
+
+  if (height > width) {
+    return { width, height, openAiSize: '1024x1536' };
+  }
+  if (width > height) {
+    return { width, height, openAiSize: '1536x1024' };
+  }
+  return { width, height, openAiSize: '1024x1024' };
 }
 
 function extractJsonCandidate(raw: string): string {
@@ -27,27 +52,75 @@ function extractJsonCandidate(raw: string): string {
   return (jsonMatch?.[1] || raw).trim();
 }
 
-function parseSlides(raw: string): GeneratedSlideCopy[] {
+function enforceNoTextImagePrompt(prompt: string, width: number, height: number): string {
+  const cleaned = String(prompt || '').replace(/\s+/g, ' ').trim();
+  const base = cleaned || 'Professional Instagram visual scene';
+  return `${base} ${width}x${height}, photorealistic, full-bleed background, subject occupies most of frame, no text, no letters, no words, no typography, no logo, no watermark, no signage, exclude readable characters.`;
+}
+
+function shouldRetryForTextSafety(prompt: string): boolean {
+  return TEXT_RISK_PATTERN.test(String(prompt || ''));
+}
+
+function buildTextSafeRetryPrompt(prompt: string): string {
+  const cleaned = String(prompt || '')
+    .replace(TEXT_RISK_PATTERN, 'abstract human-focused scene')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return `${cleaned || 'Professional Instagram visual scene'}, clean commercial photography, abstract geometric accents, blank surfaces, brandless objects, unlabeled environments, no screens, no dashboards, no documents, no posters, no signage, no quotes, no testimonials, no visible writing`;
+}
+
+function resolveFalModelPath(imageModel?: ImageModelPreference): string {
+  const requested = String(imageModel || process.env.FAL_IMAGE_MODEL || '').toLowerCase().trim();
+  if (requested === 'dev' || requested === 'fal-ai/flux/dev') return 'fal-ai/flux/dev';
+  return 'fal-ai/flux/schnell';
+}
+
+function stripVisualNoise(text: string): string {
+  return text
+    .replace(/\B#[\wÀ-ÿ-]+/g, ' ')
+    .replace(/[\*_`~]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function clampWords(text: string, maxWords: number): string {
+  const words = stripVisualNoise(text).split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return words.join(' ');
+  return words.slice(0, maxWords).join(' ');
+}
+
+function parseSlides(raw: string, targetCount = 5): GeneratedSlideCopy[] {
+  const oneSlideMode = targetCount <= 1;
   const parsed = JSON.parse(extractJsonCandidate(raw));
   if (!Array.isArray(parsed)) {
     throw new Error('Invalid slide payload from LLM');
   }
 
   return parsed.map((item, index) => ({
-    title: String(item?.title || item?.headline || `Slide ${index + 1}`).slice(0, 120),
-    subtitle: String(item?.subtitle || item?.body || '').slice(0, 420),
+    title: clampWords(String(item?.title || item?.headline || `Slide ${index + 1}`), oneSlideMode ? 16 : 12).slice(0, 120),
+    subtitle: clampWords(String(item?.subtitle || item?.body || ''), oneSlideMode ? 18 : 45).slice(0, 420),
   }));
 }
 
-async function generateImageWithFalFlux(prompt: string, styleHint?: string): Promise<string> {
+async function generateImageWithFalFlux(
+  prompt: string,
+  styleHint?: string,
+  canvasWidth = 1080,
+  canvasHeight = 1080,
+  imageModel?: ImageModelPreference
+): Promise<string> {
   const apiKey = process.env.FAL_API_KEY;
   if (!apiKey) {
     throw new Error('FAL_API_KEY not configured');
   }
 
-  const imagePrompt = `${prompt}${styleHint ? ` Estilo visual: ${styleHint}.` : ''} 1080x1080, no text overlay, no logo, no watermark.`;
+  const imageSpec = resolveImageDimensions(canvasWidth, canvasHeight);
+  const imagePrompt = `${enforceNoTextImagePrompt(prompt, imageSpec.width, imageSpec.height)}${styleHint ? ` Estilo visual: ${styleHint}.` : ''}`;
 
-  const response = await fetch('https://fal.run/fal-ai/flux/schnell', {
+  const modelPath = resolveFalModelPath(imageModel);
+  const response = await fetch(`https://fal.run/${modelPath}`, {
     method: 'POST',
     headers: {
       Authorization: `Key ${apiKey}`,
@@ -55,7 +128,8 @@ async function generateImageWithFalFlux(prompt: string, styleHint?: string): Pro
     },
     body: JSON.stringify({
       prompt: imagePrompt,
-      image_size: { width: 1080, height: 1080 },
+      negative_prompt: ANTI_TEXT_NEGATIVE_PROMPT,
+      image_size: { width: imageSpec.width, height: imageSpec.height },
       num_inference_steps: 4,
       num_images: 1,
     }),
@@ -75,17 +149,23 @@ async function generateImageWithFalFlux(prompt: string, styleHint?: string): Pro
   return imageUrl;
 }
 
-async function generateImageWithOpenAI(prompt: string, styleHint?: string): Promise<string> {
+async function generateImageWithOpenAI(
+  prompt: string,
+  styleHint?: string,
+  canvasWidth = 1080,
+  canvasHeight = 1080
+): Promise<string> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY not configured');
   }
 
+  const imageSpec = resolveImageDimensions(canvasWidth, canvasHeight);
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const imagePrompt = `${prompt}${styleHint ? ` Estilo visual: ${styleHint}.` : ''} Proporcao quadrada para Instagram.`;
+  const imagePrompt = `${enforceNoTextImagePrompt(prompt, imageSpec.width, imageSpec.height)}${styleHint ? ` Estilo visual: ${styleHint}.` : ''}`;
   const result = await openai.images.generate({
     model: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1',
     prompt: imagePrompt,
-    size: '1024x1024',
+    size: imageSpec.openAiSize,
   });
 
   const b64 = result.data?.[0]?.b64_json;
@@ -106,8 +186,10 @@ export async function generateSlidesCopy(prompt: string, slidesCount: number): P
 
   if (!isLLMConfigured()) {
     return Array.from({ length: safeCount }, (_, index) => ({
-      title: index === 0 ? prompt.slice(0, 90) : `Ponto ${index + 1}`,
-      subtitle: index === safeCount - 1 ? 'Salve este carrossel e compartilhe com seu time.' : `Resumo do tema: ${prompt.slice(0, 180)}`,
+      title: index === 0 ? clampWords(prompt.slice(0, 90), safeCount === 1 ? 16 : 12) : `Ponto ${index + 1}`,
+      subtitle: safeCount === 1
+        ? ''
+        : (index === safeCount - 1 ? 'Salve este carrossel e compartilhe com seu time.' : clampWords(`Resumo do tema: ${prompt.slice(0, 180)}`, 45)),
     }));
   }
 
@@ -125,7 +207,7 @@ export async function generateSlidesCopy(prompt: string, slidesCount: number): P
     ],
   });
 
-  const generated = parseSlides(response.content);
+  const generated = parseSlides(response.content, safeCount);
   return generated.slice(0, safeCount);
 }
 
@@ -136,10 +218,13 @@ interface GenerateSlidesWithAgentsOptions {
   clientId: string;
   userId: string;
   pool: Pool;
+  canvasWidth?: number;
+  canvasHeight?: number;
   tone?: string;
   goal?: string;
   imageStyleHint?: string;
   textDepth?: 'concise' | 'detailed';
+  signal?: AbortSignal;
   onProgress?: (stage: string, progress: number) => void;
 }
 
@@ -152,6 +237,9 @@ export async function generateSlidesWithAgents(
 ): Promise<{
   slides: GeneratedSlideCopy[];
   imagePrompts?: string[];
+  imageUrls?: string[];
+  htmlSlideConfigs?: import('@shared/types/html-slide-config').HtmlSlideConfig[];
+  htmlSlides?: string[];
   usedAgents: boolean;
 }> {
   const {
@@ -161,10 +249,13 @@ export async function generateSlidesWithAgents(
     clientId,
     userId,
     pool,
+    canvasWidth = 1080,
+    canvasHeight = 1080,
     tone = 'engajamento',
     goal = 'engagement',
     imageStyleHint,
     textDepth,
+    signal,
     onProgress,
   } = options;
 
@@ -204,34 +295,48 @@ export async function generateSlidesWithAgents(
   }
 
   try {
-    const result = await executeGraph({
-      jobId,
-      tenantId,
-      clientId,
-      userId,
-      pool,
-      payload: {
-        title_hint: prompt,
-        goal,
-        tone,
-        channels: ['instagram'],
-        language: 'pt-BR',
-        slide_count: safeCount,
-        slidesCount: safeCount,
-        image_style_hint: imageStyleHint,
-        imageStyleHint,
-        textDepth,
-        generation: { max_words: 500 },
-      },
-      onNodeStart: (nodeId) => {
-        console.log(`[creative-ai] Agent node started: ${nodeId}`);
-        onProgress?.(`Agente ativo: ${nodeId}`, 15);
-      },
-      onNodeComplete: (nodeId, nodeResult) => {
-        console.log(`[creative-ai] Agent node completed: ${nodeId} (${nodeResult.status})`);
-        onProgress?.(`Agente concluído: ${nodeId}`, 20);
-      },
-    });
+    const localAbortController = signal ? null : new AbortController();
+    const executionSignal = signal || localAbortController?.signal;
+    if (localAbortController) {
+      registerJobAbortController(jobId, localAbortController);
+    }
+
+    let result;
+    try {
+      result = await executeGraph({
+        jobId,
+        tenantId,
+        clientId,
+        userId,
+        pool,
+        signal: executionSignal,
+        payload: {
+          title_hint: prompt,
+          goal,
+          tone,
+          channels: ['instagram'],
+          language: 'pt-BR',
+          slide_count: safeCount,
+          slidesCount: safeCount,
+          image_style_hint: imageStyleHint,
+          imageStyleHint,
+          canvasWidth,
+          canvasHeight,
+          textDepth,
+          generation: { max_words: 500 },
+        },
+        onNodeStart: (nodeId) => {
+          console.log(`[creative-ai] Agent node started: ${nodeId}`);
+          onProgress?.(`Agente ativo: ${nodeId}`, 15);
+        },
+        onNodeComplete: (nodeId, nodeResult) => {
+          console.log(`[creative-ai] Agent node completed: ${nodeId} (${nodeResult.status})`);
+          onProgress?.(`Agente concluído: ${nodeId}`, 20);
+        },
+      });
+    } finally {
+      removeJobAbortController(jobId);
+    }
 
     onProgress?.('Processando resultado dos agentes', 70);
 
@@ -272,6 +377,9 @@ export async function generateSlidesWithAgents(
     return {
       slides,
       imagePrompts: state.imagePrompts,
+      imageUrls: state.imageUrls,
+      htmlSlideConfigs: state.htmlSlideConfigs,
+      htmlSlides: state.htmlSlides,
       usedAgents: true,
     };
   } catch (error: any) {
@@ -287,6 +395,7 @@ export async function generateSlidesWithAgents(
  * Usado quando o grafo usa writer normal em vez de carousel-writer.
  */
 function parseDraftContentToSlides(content: string, targetCount: number): GeneratedSlideCopy[] {
+  const oneSlideMode = targetCount <= 1;
   const lines = content.split('\n').filter((l) => l.trim());
   const slides: GeneratedSlideCopy[] = [];
 
@@ -300,8 +409,8 @@ function parseDraftContentToSlides(content: string, targetCount: number): Genera
     if (match) {
       if (currentTitle) {
         slides.push({
-          title: currentTitle.slice(0, 120),
-          subtitle: currentBody.trim().slice(0, 420) || ' ',
+          title: clampWords(currentTitle, oneSlideMode ? 16 : 12).slice(0, 120),
+          subtitle: clampWords(currentBody.trim(), oneSlideMode ? 18 : 45).slice(0, 420) || ' ',
         });
       }
       currentTitle = match[1].trim();
@@ -314,8 +423,8 @@ function parseDraftContentToSlides(content: string, targetCount: number): Genera
   // Adiciona o último
   if (currentTitle) {
     slides.push({
-      title: currentTitle.slice(0, 120),
-      subtitle: currentBody.trim().slice(0, 420) || ' ',
+      title: clampWords(currentTitle, oneSlideMode ? 16 : 12).slice(0, 120),
+      subtitle: clampWords(currentBody.trim(), oneSlideMode ? 18 : 45).slice(0, 420) || ' ',
     });
   }
 
@@ -329,8 +438,8 @@ function parseDraftContentToSlides(content: string, targetCount: number): Genera
     for (let i = 0; i < Math.min(paragraphs.length, targetCount); i++) {
       const sentences = paragraphs[i].split(/[.!?]/).filter((s) => s.trim().length > 5);
       slides.push({
-        title: sentences[0]?.trim().slice(0, 120) || `Ponto ${i + 1}`,
-        subtitle: paragraphs[i].slice(0, 420),
+        title: clampWords(sentences[0]?.trim() || `Ponto ${i + 1}`, oneSlideMode ? 16 : 12).slice(0, 120),
+        subtitle: clampWords(paragraphs[i], oneSlideMode ? 18 : 45).slice(0, 420),
       });
     }
   }
@@ -418,12 +527,32 @@ export async function generateCaptionFromSlides(
   };
 }
 
-export async function generateSlideImage(prompt: string, styleHint?: string): Promise<string> {
+export async function generateSlideImage(
+  prompt: string,
+  styleHint?: string,
+  canvasWidth = 1080,
+  canvasHeight = 1080,
+  imageModel?: ImageModelPreference
+): Promise<string> {
   const seed = encodeURIComponent(`${prompt}-${styleHint || 'default'}`.slice(0, 64));
+  const imageSpec = resolveImageDimensions(canvasWidth, canvasHeight);
+  const retryForTextSafety = shouldRetryForTextSafety(prompt);
 
   try {
     if (process.env.FAL_API_KEY) {
-      return await generateImageWithFalFlux(prompt, styleHint);
+      const firstImage = await generateImageWithFalFlux(prompt, styleHint, canvasWidth, canvasHeight, imageModel);
+
+      if (!retryForTextSafety) {
+        return firstImage;
+      }
+
+      try {
+        console.log('[creative-ai] Retrying image with stronger text-safety constraints');
+        return await generateImageWithFalFlux(buildTextSafeRetryPrompt(prompt), styleHint, canvasWidth, canvasHeight, imageModel);
+      } catch (retryError) {
+        console.warn('fal.ai text-safety retry failed, using first image:', retryError);
+        return firstImage;
+      }
     }
   } catch (error) {
     console.warn('fal.ai image generation failed, trying fallback provider:', error);
@@ -431,11 +560,23 @@ export async function generateSlideImage(prompt: string, styleHint?: string): Pr
 
   try {
     if (process.env.OPENAI_API_KEY) {
-      return await generateImageWithOpenAI(prompt, styleHint);
+      const firstImage = await generateImageWithOpenAI(prompt, styleHint, canvasWidth, canvasHeight);
+
+      if (!retryForTextSafety) {
+        return firstImage;
+      }
+
+      try {
+        console.log('[creative-ai] Retrying OpenAI image with stronger text-safety constraints');
+        return await generateImageWithOpenAI(buildTextSafeRetryPrompt(prompt), styleHint, canvasWidth, canvasHeight);
+      } catch (retryError) {
+        console.warn('OpenAI text-safety retry failed, using first image:', retryError);
+        return firstImage;
+      }
     }
   } catch (error) {
     console.warn('OpenAI image generation failed, falling back to picsum:', error);
   }
 
-  return `https://picsum.photos/seed/${seed}/1080/1080`;
+  return `https://picsum.photos/seed/${seed}/${imageSpec.width}/${imageSpec.height}`;
 }

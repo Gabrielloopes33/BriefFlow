@@ -1,7 +1,9 @@
 /**
- * Tipos do Editor Visual Konva
+ * Tipos do editor visual de criativos
  * Define a estrutura de slides, camadas e templates
  */
+
+import type { HtmlSlideConfig } from '@shared/types/html-slide-config';
 
 export interface SlideBackground {
   type: 'color' | 'gradient' | 'image';
@@ -199,6 +201,8 @@ export interface Creative {
   accentColor?: string;
   instagramHandle?: string;
   slides: Slide[];
+  htmlSlideConfigs?: HtmlSlideConfig[];
+  htmlSlides?: string[];
   exportUrls: string[];
   status: 'draft' | 'ready' | 'published';
   createdAt: string;
@@ -210,15 +214,17 @@ export interface GenerateCarouselDto {
   prompt: string;
   referenceImageUrl?: string;
   slidesCount: number;
-  imageMode: 'background' | 'grid' | 'both';
+  imageMode?: 'background' | 'grid' | 'both';
   imageStyleHint?: string;
-  layoutMode: 'minimalist' | 'profile' | 'editorial' | 'bold' | 'split' | 'cinematic' | 'twitter';
+  layoutMode?: 'minimalist' | 'profile' | 'editorial' | 'bold' | 'split' | 'cinematic' | 'twitter';
   format: 'square' | 'portrait' | 'story';
-  instagramHandle: string;
-  fontCombination: FontCombination;
-  accentColor: string;
+  instagramHandle?: string;
+  fontCombination?: FontCombination;
+  accentColor?: string;
+  imageModel?: 'schnell' | 'dev';
   generateImages: boolean;
   textDepth?: 'concise' | 'detailed';
+  templateStrategy?: 'predefined' | 'ai';
 }
 
 export interface GenerateCarouselResponse {

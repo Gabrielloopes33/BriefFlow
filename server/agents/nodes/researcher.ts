@@ -3,12 +3,10 @@
  * Coleta e sintetiza conteúdo das fontes do cliente
  */
 
-import { ChatOpenAI } from '@langchain/openai';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { AgentState } from '../state';
 import { selectProvider } from '../../services/crawler-provider';
 import type { CrawlSource } from '../../services/crawler-provider';
-import { createLangChainClient, getDefaultModel } from '../../services/llm-provider';
+import { createLLMClient, getDefaultModel } from '../../services/llm-provider';
 
 interface ResearcherConfig {
   model?: string;
@@ -78,25 +76,19 @@ export async function researcherNode(
     : '';
 
   // 3. Sintetizar com LLM
-  const llmConfig = createLangChainClient();
-  if (!llmConfig) {
-    console.error('[researcher] No LLM provider configured');
+  let llm;
+  try {
+    llm = createLLMClient('groq');
+  } catch (err: any) {
+    console.error('[researcher] No LLM provider configured:', err.message);
     return {
       research: 'Erro: nenhum provider LLM configurado.',
       errors: [
         ...state.errors,
-        { node: 'researcher', message: 'No LLM provider configured', timestamp: new Date().toISOString() },
+        { node: 'researcher', message: err.message, timestamp: new Date().toISOString() },
       ],
     };
   }
-
-  const llm = new ChatOpenAI({
-    modelName: model,
-    temperature,
-    maxTokens,
-    openAIApiKey: llmConfig.openAIApiKey,
-    configuration: llmConfig.configuration,
-  });
 
   const systemPrompt = `Você é um pesquisador especializado. Analise as fontes fornecidas e extraia:
 1. Tendências e insights principais
@@ -113,17 +105,20 @@ Idioma: ${state.language}
 ${sourceContext}`;
 
   try {
-    const response = await llm.invoke([
-      new SystemMessage(systemPrompt),
-      new HumanMessage(userPrompt),
-    ]);
+    const response = await llm.chatCompletion({
+      model,
+      max_tokens: maxTokens,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature,
+    });
 
-    const research = typeof response.content === 'string'
-      ? response.content
-      : JSON.stringify(response.content);
+    const research = response.content || '';
 
     const latency = Date.now() - startTime;
-    const tokens = (response as any).usage?.total_tokens || 0;
+    const tokens = response.usage?.total_tokens || 0;
 
     return {
       research,
@@ -137,7 +132,7 @@ ${sourceContext}`;
         ...state.metadata,
         totalTokens: state.metadata.totalTokens + tokens,
         totalLatency: state.metadata.totalLatency + latency,
-        models: [...state.metadata.models, model],
+        models: [...state.metadata.models, response.model],
       },
     };
   } catch (err: any) {

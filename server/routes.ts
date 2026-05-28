@@ -10,14 +10,23 @@ import {
   generateSlideImage,
   generateSlidesCopy,
   generateSlidesWithAgents,
+  type ImageModelPreference,
   refineSlideCopy,
 } from "./services/creative-ai";
 import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerAnalyticsRoutes } from "./routes/analytics";
 import { registerAuthRoutes } from "./routes/auth";
+import clientDocumentsRouter from "./routes/client-documents";
+import clientMoodboardRouter from "./routes/client-moodboard";
 import { broadcastJobEvent, broadcastToUsers } from "./websocket/job-broadcaster";
 import type { JobEvent } from "./websocket/job-events";
 import { buildSlideFromTemplate } from "./slide-templates";
+import { configToHtml } from "./utils/html-slide-renderer";
+import { abortJob } from "./services/job-abort-registry";
+import type { HtmlSlideConfig } from "@shared/types/html-slide-config";
+import type { AgentState } from "./agents/state";
+import { imagePromptEngineerNode } from "./agents/nodes/image-prompt-engineer";
+import { htmlSlideGeneratorNode } from "./agents/nodes/html-slide-generator";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -1205,6 +1214,7 @@ export async function registerRoutes(
           `UPDATE jobs SET status='failed', updated_at=NOW() WHERE id=$1`,
           [req.params.jobId]
         );
+        abortJob(req.params.jobId);
         res.json({ ok: true });
       } finally { pgClient.release(); }
     } catch (error: any) {
@@ -1228,6 +1238,10 @@ export async function registerRoutes(
                   (to_jsonb(p) ->> 'scheduled_for')::timestamptz AS scheduled_for,
                   COALESCE(to_jsonb(p) ->> 'stage_tag', 'draft') AS stage_tag,
                   COALESCE((to_jsonb(p) ->> 'kanban_order')::int, 0) AS kanban_order,
+                  COALESCE(to_jsonb(p) -> 'tags', '[]'::jsonb) AS tags,
+                  COALESCE(to_jsonb(p) ->> 'format_type', 'carousel') AS format_type,
+                  to_jsonb(p) ->> 'notes' AS notes,
+                  to_jsonb(p) ->> 'color_label' AS color_label,
                   p.created_at, p.updated_at
            FROM posts p WHERE p.client_id=$1 AND p.tenant_id=$2 ORDER BY p.created_at DESC`,
           [req.params.clientId, tenantId]
@@ -1249,6 +1263,12 @@ export async function registerRoutes(
       const view = typeof req.query.view === "string" ? req.query.view : "month";
       const fromInput = typeof req.query.from === "string" ? req.query.from : null;
       const toInput = typeof req.query.to === "string" ? req.query.to : null;
+      const includeArchived = req.query.include_archived === "true";
+      const formatType = typeof req.query.format_type === "string" ? req.query.format_type.trim() : "";
+
+      const visibleStatuses = includeArchived
+        ? ["draft", "in_production", "ready_review", "in_approval", "approved", "scheduled", "published", "rejected"]
+        : ["draft", "in_production", "ready_review", "in_approval", "approved", "scheduled"];
 
       const now = new Date();
       const defaultFrom = new Date(now);
@@ -1281,6 +1301,10 @@ export async function registerRoutes(
                   (to_jsonb(p) ->> 'scheduled_for')::timestamptz AS scheduled_for,
                   COALESCE(to_jsonb(p) ->> 'stage_tag', 'draft') AS stage_tag,
                   COALESCE((to_jsonb(p) ->> 'kanban_order')::int, 0) AS kanban_order,
+                  COALESCE(to_jsonb(p) -> 'tags', '[]'::jsonb) AS tags,
+                  COALESCE(to_jsonb(p) ->> 'format_type', 'carousel') AS format_type,
+                  to_jsonb(p) ->> 'notes' AS notes,
+                  to_jsonb(p) ->> 'color_label' AS color_label,
                   p.created_at, p.updated_at,
                   (to_jsonb(p) ->> 'status_updated_at')::timestamptz AS status_updated_at,
                   to_jsonb(p) ->> 'status_updated_by' AS status_updated_by
@@ -1289,8 +1313,10 @@ export async function registerRoutes(
              AND p.tenant_id=$2
              AND COALESCE((to_jsonb(p) ->> 'scheduled_for')::timestamptz, p.created_at) >= $3
              AND COALESCE((to_jsonb(p) ->> 'scheduled_for')::timestamptz, p.created_at) <= $4
+             AND p.status = ANY($5::text[])
+             AND ($6::text = '' OR COALESCE(to_jsonb(p) ->> 'format_type', 'carousel') = $6::text)
            ORDER BY COALESCE((to_jsonb(p) ->> 'scheduled_for')::timestamptz, p.created_at) ASC, p.created_at ASC`,
-          [req.params.clientId, tenantId, fromDate.toISOString(), toDate.toISOString()]
+          [req.params.clientId, tenantId, fromDate.toISOString(), toDate.toISOString(), visibleStatuses, formatType]
         );
 
         const buckets: Record<string, any[]> = {};
@@ -1330,6 +1356,10 @@ export async function registerRoutes(
                   (to_jsonb(p) ->> 'scheduled_for')::timestamptz AS scheduled_for,
                   COALESCE(to_jsonb(p) ->> 'stage_tag', 'draft') AS stage_tag,
                   COALESCE((to_jsonb(p) ->> 'kanban_order')::int, 0) AS kanban_order,
+                  COALESCE(to_jsonb(p) -> 'tags', '[]'::jsonb) AS tags,
+                  COALESCE(to_jsonb(p) ->> 'format_type', 'carousel') AS format_type,
+                  to_jsonb(p) ->> 'notes' AS notes,
+                  to_jsonb(p) ->> 'color_label' AS color_label,
                   p.created_at, p.updated_at,
                   (to_jsonb(p) ->> 'status_updated_at')::timestamptz AS status_updated_at,
                   to_jsonb(p) ->> 'status_updated_by' AS status_updated_by
@@ -1434,17 +1464,35 @@ export async function registerRoutes(
           }
         }
 
+        const { rows: scheduledForColumnRows } = await pgClient.query(
+          `SELECT EXISTS (
+             SELECT 1
+             FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'posts'
+               AND column_name = 'scheduled_for'
+           ) AS exists`
+        );
+        const hasScheduledForColumn = Boolean(scheduledForColumnRows[0]?.exists);
+
+        const scheduledForSetClause = hasScheduledForColumn
+          ? `scheduled_for = COALESCE($2::timestamptz, scheduled_for),`
+          : ``;
+        const scheduledForReturningClause = hasScheduledForColumn
+          ? `scheduled_for,`
+          : `NULL::timestamptz AS scheduled_for,`;
+
         const { rows: updatedRows } = await pgClient.query(
           `UPDATE posts
            SET status = COALESCE($1, status),
-               scheduled_for = COALESCE($2::timestamptz, scheduled_for),
+               ${scheduledForSetClause}
                stage_tag = COALESCE($3, stage_tag),
                status_updated_at = CASE WHEN $1 IS NOT NULL THEN NOW() ELSE status_updated_at END,
                status_updated_by = CASE WHEN $1 IS NOT NULL THEN $4 ELSE status_updated_by END,
                updated_at = NOW()
            WHERE tenant_id = $5 AND id = ANY($6::uuid[])
            RETURNING id, client_id, title, content, channels, status, generated_by,
-                     scheduled_for, stage_tag, kanban_order,
+                     ${scheduledForReturningClause} stage_tag, kanban_order,
                      created_at, updated_at, status_updated_at, status_updated_by`,
           [status ?? null, scheduled_for ?? null, stage_tag ?? null, req.userId, tenantId, post_ids]
         );
@@ -1858,7 +1906,7 @@ export async function registerRoutes(
           type: "workspace:message-created",
           tenantId: access.tenant_id,
           clientId: access.client_id,
-          threadId,
+          threadId: String(threadId),
           messageId: String(insertResult.rows[0].id),
           authorRole: "client",
         });
@@ -2034,6 +2082,10 @@ export async function registerRoutes(
             (to_jsonb(p) ->> 'scheduled_for')::timestamptz AS scheduled_for,
             COALESCE(to_jsonb(p) ->> 'stage_tag', 'draft') AS stage_tag,
             COALESCE((to_jsonb(p) ->> 'kanban_order')::int, 0) AS kanban_order,
+            COALESCE(to_jsonb(p) -> 'tags', '[]'::jsonb) AS tags,
+            COALESCE(to_jsonb(p) ->> 'format_type', 'carousel') AS format_type,
+            to_jsonb(p) ->> 'notes' AS notes,
+            to_jsonb(p) ->> 'color_label' AS color_label,
             p.created_at,
             p.updated_at,
             (to_jsonb(p) ->> 'status_updated_at')::timestamptz AS status_updated_at,
@@ -2065,6 +2117,33 @@ export async function registerRoutes(
     }
   });
 
+  // Get all unique tags used by a tenant
+  app.get("/api/posts/tags", async (req, res) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      const pgClient = await getClientForUser(req.userId);
+      try {
+        const { rows } = await pgClient.query(
+          `SELECT DISTINCT UNNEST(tags) AS tag
+           FROM posts
+           WHERE tenant_id = $1
+             AND tags IS NOT NULL
+             AND array_length(tags, 1) > 0
+           ORDER BY tag`,
+          [tenantId]
+        );
+        res.json(rows.map((r: any) => r.tag));
+      } finally {
+        pgClient.release();
+      }
+    } catch (error: any) {
+      console.error("Error fetching post tags:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch post tags" });
+    }
+  });
+
   // Get post detail
   app.get("/api/posts/:postId", async (req, res) => {
     try {
@@ -2076,6 +2155,7 @@ export async function registerRoutes(
         const { rows } = await pgClient.query(
           `SELECT id, client_id, title, content, channels, status, generated_by,
                   scheduled_for, stage_tag, kanban_order,
+                  tags, format_type, notes, color_label,
                   created_at, updated_at, status_updated_at, status_updated_by
            FROM posts WHERE id=$1 AND tenant_id=$2`,
           [req.params.postId, tenantId]
@@ -2135,6 +2215,19 @@ export async function registerRoutes(
           return res.status(404).json({ message: 'Post not found' });
         }
 
+        const stripVisualNoise = (value: string) =>
+          String(value || '')
+            .replace(/\B#[\wÀ-ÿ-]+/g, ' ')
+            .replace(/[\*_`~]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const clampWords = (value: string, maxWords: number) => {
+          const words = stripVisualNoise(value).split(/\s+/).filter(Boolean);
+          if (words.length <= maxWords) return words.join(' ');
+          return words.slice(0, maxWords).join(' ');
+        };
+
         const contentText = String(post.content || '').trim();
         const normalized = contentText.replace(/\r/g, '');
         const matches = Array.from(
@@ -2153,7 +2246,12 @@ export async function registerRoutes(
           ? contentText.slice(0, 220)
           : 'Conteúdo importado da biblioteca';
 
-        const slideCopy = (parsedSlides.length > 0 ? parsedSlides : [{ title: baseTitle, subtitle: fallbackSubtitle }]).slice(0, 10);
+        const rawSlideCopy = (parsedSlides.length > 0 ? parsedSlides : [{ title: baseTitle, subtitle: fallbackSubtitle }]).slice(0, 10);
+        const oneSlideMode = rawSlideCopy.length <= 1;
+        const slideCopy = rawSlideCopy.map((copy) => ({
+          title: clampWords(copy.title, oneSlideMode ? 16 : 12),
+          subtitle: clampWords(copy.subtitle, oneSlideMode ? 18 : 45),
+        }));
 
         const slides = slideCopy.map((copy, index) =>
           buildCreativeSlide({
@@ -2202,7 +2300,7 @@ export async function registerRoutes(
       const tenantId = requireTenantId(req, res);
       if (!tenantId) return;
 
-      const { title, content, status, scheduled_for, stage_tag, kanban_order } = req.body;
+      const { title, content, status, scheduled_for, stage_tag, kanban_order, tags, format_type, notes, color_label } = req.body;
       if (status !== undefined) {
         return res.status(400).json({
           message: "Use PUT /api/posts/:postId/status para alterar status com validação de fluxo.",
@@ -2214,12 +2312,20 @@ export async function registerRoutes(
           `UPDATE posts
            SET title=COALESCE($1,title),
                content=COALESCE($2,content),
-               scheduled_for=COALESCE($3, scheduled_for),
+               scheduled_for=COALESCE($3::timestamptz, scheduled_for),
                stage_tag=COALESCE($4, stage_tag),
-               kanban_order=COALESCE($5, kanban_order),
+               kanban_order=COALESCE($5::int, kanban_order),
+               tags=COALESCE($6, tags),
+               format_type=COALESCE($7, format_type),
+               notes=COALESCE($8, notes),
+               color_label=COALESCE($9, color_label),
                updated_at=NOW()
-           WHERE id=$6 AND tenant_id=$7 RETURNING *`,
-          [title, content, scheduled_for, stage_tag, kanban_order, req.params.postId, tenantId]
+           WHERE id=$10 AND tenant_id=$11 RETURNING *`,
+          [
+            title, content, scheduled_for, stage_tag, kanban_order,
+            tags, format_type, notes, color_label,
+            req.params.postId, tenantId
+          ]
         );
         if (!rows[0]) return res.status(404).json({ message: "Post not found" });
         res.json(rows[0]);
@@ -2893,6 +2999,26 @@ export async function registerRoutes(
 
   const DEFAULT_FONT_COMBINATION = { title: 'Space', body: 'Inter' };
 
+  function normalizeImageModel(input: unknown): ImageModelPreference {
+    return String(input || '').toLowerCase().trim() === 'dev' ? 'dev' : 'schnell';
+  }
+
+  function mapTitleFontToHtmlFamily(input: unknown): 'Space Grotesk' | 'Inter' | 'Merriweather' | 'Outfit' {
+    const value = String(input || '').toLowerCase().trim();
+    if (value === 'outfit') return 'Outfit';
+    if (value === 'inter') return 'Inter';
+    if (value === 'playfair' || value === 'merriweather') return 'Merriweather';
+    return 'Space Grotesk';
+  }
+
+  function mapBodyFontToHtmlFamily(input: unknown): 'Space Grotesk' | 'Inter' | 'Merriweather' | 'Outfit' {
+    const value = String(input || '').toLowerCase().trim();
+    if (value === 'outfit') return 'Outfit';
+    if (value === 'space' || value === 'space grotesk') return 'Space Grotesk';
+    if (value === 'playfair' || value === 'merriweather') return 'Merriweather';
+    return 'Inter';
+  }
+
   function clampSlideCount(input: unknown): number {
     const parsed = Number(input);
     if (!Number.isFinite(parsed)) return 6;
@@ -2904,6 +3030,7 @@ export async function registerRoutes(
     title: string;
     subtitle: string;
     accentColor: string;
+    templateSeed?: string;
     layoutMode: 'minimalist' | 'profile' | 'editorial' | 'bold' | 'split' | 'cinematic' | 'twitter';
     imageMode: 'background' | 'grid' | 'both';
     imageUrl?: string;
@@ -2917,6 +3044,7 @@ export async function registerRoutes(
       title: params.title,
       subtitle: params.subtitle,
       accentColor: params.accentColor,
+      templateSeed: params.templateSeed,
       layoutMode: params.layoutMode,
       imageMode: params.imageMode,
       imageUrl: params.imageUrl,
@@ -3014,7 +3142,7 @@ export async function registerRoutes(
           format, canvas_width as "canvasWidth", canvas_height as "canvasHeight",
           layout_mode as "layoutMode", font_combination as "fontCombination",
           accent_color as "accentColor", instagram_handle as "instagramHandle",
-          profile_config as "profileConfig", slides, export_urls as "exportUrls",
+          profile_config as "profileConfig", slides, html_slides as "htmlSlides", html_slide_configs as "htmlSlideConfigs", export_urls as "exportUrls",
           status, created_at as "createdAt", updated_at as "updatedAt"
           FROM creatives WHERE tenant_id = $1`;
         const params: string[] = [tenantId];
@@ -3047,7 +3175,7 @@ export async function registerRoutes(
            format, canvas_width as "canvasWidth", canvas_height as "canvasHeight",
            layout_mode as "layoutMode", font_combination as "fontCombination",
            accent_color as "accentColor", instagram_handle as "instagramHandle",
-           profile_config as "profileConfig", slides, export_urls as "exportUrls",
+           profile_config as "profileConfig", slides, html_slides as "htmlSlides", html_slide_configs as "htmlSlideConfigs", export_urls as "exportUrls",
            status, created_at as "createdAt", updated_at as "updatedAt"
            FROM creatives WHERE id = $1 AND tenant_id = $2`,
           [req.params.id, tenantId]
@@ -3080,6 +3208,7 @@ export async function registerRoutes(
         accentColor,
         instagramHandle,
         profileConfig,
+        htmlSlideConfigs,
       } = req.body;
 
       // Determinar dimensões do canvas baseado no formato
@@ -3099,15 +3228,15 @@ export async function registerRoutes(
              tenant_id, client_id, post_id, template_id, type, platform,
              format, canvas_width, canvas_height,
              layout_mode, font_combination, accent_color, instagram_handle, profile_config,
-             slides, status
+             slides, html_slide_configs, status
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'draft')
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'draft')
            RETURNING id, tenant_id as "tenantId", client_id as "clientId", post_id as "postId",
            template_id as "templateId", type, platform,
            format, canvas_width as "canvasWidth", canvas_height as "canvasHeight",
            layout_mode as "layoutMode", font_combination as "fontCombination",
            accent_color as "accentColor", instagram_handle as "instagramHandle",
-           profile_config as "profileConfig", slides, export_urls as "exportUrls",
+           profile_config as "profileConfig", slides, html_slides as "htmlSlides", html_slide_configs as "htmlSlideConfigs", export_urls as "exportUrls",
            status, created_at as "createdAt", updated_at as "updatedAt"`,
           [
             tenantId,
@@ -3125,6 +3254,7 @@ export async function registerRoutes(
             instagramHandle || '',
             profileConfig ? JSON.stringify(profileConfig) : null,
             JSON.stringify(slides || []),
+            htmlSlideConfigs ? JSON.stringify(htmlSlideConfigs) : null,
           ]
         );
         res.status(201).json(rows[0]);
@@ -3150,7 +3280,8 @@ export async function registerRoutes(
         format = 'portrait',
         instagramHandle = '',
         fontCombination = DEFAULT_FONT_COMBINATION,
-        accentColor = '#3B82F6',
+        imageModel = 'schnell',
+        accentColor = '#C8A96E',
         generateImages = true,
         textDepth,
       } = req.body || {};
@@ -3164,6 +3295,9 @@ export async function registerRoutes(
       const safeLayoutMode = (['minimalist', 'profile', 'editorial', 'bold', 'split', 'cinematic', 'twitter'] as const).includes(layoutMode) ? layoutMode : 'minimalist';
       const safeFormat = ['square', 'portrait', 'story'].includes(format) ? format : 'portrait';
       const canvasDims = safeFormat === 'square' ? { w: 1080, h: 1080 } : safeFormat === 'story' ? { w: 1080, h: 1920 } : { w: 1080, h: 1350 };
+      const safeImageModel = normalizeImageModel(imageModel);
+      const titleFontFamily = mapTitleFontToHtmlFamily(fontCombination?.title);
+      const bodyFontFamily = mapBodyFontToHtmlFamily(fontCombination?.body);
       const jobId = `creative-job-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
       const userId = String(req.userId || '');
 
@@ -3194,6 +3328,8 @@ export async function registerRoutes(
             clientId,
             userId,
             pool,
+            canvasWidth: canvasDims.w,
+            canvasHeight: canvasDims.h,
             tone: req.body?.tone || 'engajamento',
             goal: req.body?.goal || 'engagement',
             imageStyleHint,
@@ -3208,7 +3344,72 @@ export async function registerRoutes(
           });
 
           const generatedCopy = agentResult.slides;
-          const imagePrompts = agentResult.imagePrompts;
+
+          let clientInfo = { name: '', niche: '', description: '' };
+          const clientContextDb = await getClientForUser(userId);
+          try {
+            const clientResult = await clientContextDb.query(
+              `SELECT name, niche, description FROM clients WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+              [clientId, tenantId]
+            );
+            if (clientResult.rows[0]) {
+              clientInfo = {
+                name: String(clientResult.rows[0].name || ''),
+                niche: String(clientResult.rows[0].niche || ''),
+                description: String(clientResult.rows[0].description || ''),
+              };
+            }
+          } finally {
+            clientContextDb.release();
+          }
+
+          const localAgentState: AgentState = {
+            jobId,
+            tenantId,
+            clientId,
+            userId,
+            channels: ['instagram'],
+            goal: req.body?.goal || 'engagement',
+            language: 'pt-BR',
+            tone: req.body?.tone || 'engajamento',
+            titleHint: prompt,
+            maxWords: 500,
+            clientName: clientInfo.name,
+            clientNiche: clientInfo.niche,
+            clientDescription: clientInfo.description,
+            clientKnowledgeContext: '',
+            clientVisualContext: '',
+            sources: [],
+            research: '',
+            draft: { title: '', content: '' },
+            slides: generatedCopy.map((copy) => ({ title: copy.title, subtitle: copy.subtitle })),
+            review: { score: 0, feedback: '', approved: false },
+            metadata: { totalTokens: 0, totalLatency: 0, models: [] },
+            payload: {
+              accentColor,
+              canvasWidth: canvasDims.w,
+              canvasHeight: canvasDims.h,
+              image_style_hint: imageStyleHint,
+              imageStyleHint,
+              visual_style: imageStyleHint || 'editorial premium',
+              generate_images_in_graph: false,
+              generateImagesInGraph: false,
+              templateStrategy: 'predefined',
+              titleFontFamily,
+              bodyFontFamily,
+              textDepth,
+            },
+            retryCount: 0,
+            errors: [],
+          };
+
+          const localImagePromptResult = (!agentResult.imagePrompts || agentResult.imagePrompts.length === 0)
+            ? await imagePromptEngineerNode(localAgentState)
+            : undefined;
+
+          const imagePrompts = agentResult.imagePrompts?.length
+            ? agentResult.imagePrompts
+            : localImagePromptResult?.imagePrompts;
 
           updateCreativeGenerationJob(jobId, {
             status: 'processing',
@@ -3219,6 +3420,7 @@ export async function registerRoutes(
           });
 
           const slides = [];
+          const generatedImageUrls: Array<string | undefined> = [];
 
           for (let index = 0; index < generatedCopy.length; index++) {
             const copy = generatedCopy[index];
@@ -3235,8 +3437,10 @@ export async function registerRoutes(
               : `${prompt}. Slide ${index + 1}: ${copy.title}`;
 
             const imageUrl = generateImages
-              ? await generateSlideImage(imagePrompt, imageStyleHint)
+              ? await generateSlideImage(imagePrompt, imageStyleHint, canvasDims.w, canvasDims.h, safeImageModel)
               : undefined;
+
+            generatedImageUrls.push(imageUrl);
 
             slides.push(
               buildCreativeSlide({
@@ -3244,6 +3448,7 @@ export async function registerRoutes(
                 title: copy.title,
                 subtitle: copy.subtitle,
                 accentColor,
+                templateSeed: `${clientId}-${prompt}`,
                 layoutMode: safeLayoutMode,
                 imageMode: safeImageMode,
                 imageUrl,
@@ -3253,6 +3458,75 @@ export async function registerRoutes(
               })
             );
           }
+
+          const localHtmlResult = await htmlSlideGeneratorNode({
+            ...localAgentState,
+            imagePrompts,
+          });
+
+          const agentHtmlSlideConfigs = agentResult.htmlSlideConfigs?.length
+            ? agentResult.htmlSlideConfigs
+            : (localHtmlResult.htmlSlideConfigs || []);
+
+          const agentHtmlSlides = agentResult.htmlSlides?.length
+            ? agentResult.htmlSlides
+            : localHtmlResult.htmlSlides;
+
+          const htmlSlideConfigs: HtmlSlideConfig[] = generatedCopy.map((copy, index) => {
+            const fromAgent = agentHtmlSlideConfigs[index];
+            const theme = fromAgent?.theme || (index % 2 === 0 ? 'dark' : 'light');
+            const textAlign = fromAgent?.textPosition?.includes('center')
+              ? 'center'
+              : fromAgent?.textPosition?.includes('right')
+                ? 'right'
+                : 'left';
+
+            return {
+              id: fromAgent?.id || `slide-${index + 1}`,
+              index,
+              canvasWidth: canvasDims.w,
+              canvasHeight: canvasDims.h,
+              theme,
+              templateVariant: fromAgent?.templateVariant || (index % 4 === 0 ? 'spotlight' : index % 4 === 1 ? 'glass-card' : index % 4 === 2 ? 'editorial-band' : 'minimal'),
+              backgroundImageUrl: generatedImageUrls[index] || fromAgent?.backgroundImageUrl,
+              backgroundColor: fromAgent?.backgroundColor || (theme === 'dark' ? '#111827' : '#f8fafc'),
+              backgroundGradient: fromAgent?.backgroundGradient,
+              backgroundZoom: fromAgent?.backgroundZoom ?? 100,
+              backgroundPositionX: fromAgent?.backgroundPositionX ?? 50,
+              backgroundPositionY: fromAgent?.backgroundPositionY ?? 50,
+              overlayColor: fromAgent?.overlayColor || '#000000',
+              overlayOpacity: fromAgent?.overlayOpacity ?? 35,
+              textPosition: fromAgent?.textPosition || 'mid-left',
+              title: {
+                text: copy.title,
+                color: fromAgent?.title?.color || (theme === 'dark' ? '#ffffff' : '#0f172a'),
+                fontSize: fromAgent?.title?.fontSize ?? 68,
+                fontFamily: titleFontFamily,
+                fontWeight: fromAgent?.title?.fontWeight || 'bold',
+                align: fromAgent?.title?.align || textAlign,
+              },
+              subtitle: {
+                text: copy.subtitle,
+                color: fromAgent?.subtitle?.color || (theme === 'dark' ? '#e5e7eb' : '#1f2937'),
+                fontSize: fromAgent?.subtitle?.fontSize ?? 30,
+                fontFamily: bodyFontFamily,
+                fontWeight: fromAgent?.subtitle?.fontWeight || 'normal',
+                align: fromAgent?.subtitle?.align || textAlign,
+              },
+              ctaButton: {
+                visible: fromAgent?.ctaButton?.visible ?? index === generatedCopy.length - 1,
+                text: fromAgent?.ctaButton?.text || (index === generatedCopy.length - 1 ? 'Quero aplicar isso' : 'Saiba mais'),
+                backgroundColor: fromAgent?.ctaButton?.backgroundColor || accentColor,
+                textColor: fromAgent?.ctaButton?.textColor || '#ffffff',
+                borderRadius: fromAgent?.ctaButton?.borderRadius ?? 18,
+              },
+              accentColor: fromAgent?.accentColor || accentColor,
+              imagePrompt: imagePrompts?.[index] || fromAgent?.imagePrompt,
+            };
+          });
+
+          const derivedHtmlSlides = htmlSlideConfigs.map((config) => configToHtml(config));
+          const htmlSlides = derivedHtmlSlides.length > 0 ? derivedHtmlSlides : agentHtmlSlides;
 
           updateCreativeGenerationJob(jobId, {
             status: 'processing',
@@ -3265,9 +3539,9 @@ export async function registerRoutes(
             const { rows } = await pgClient.query(
               `INSERT INTO creatives (
                  tenant_id, client_id, type, platform, format, canvas_width, canvas_height,
-                 layout_mode, font_combination, accent_color, instagram_handle, slides, status
+                 layout_mode, font_combination, accent_color, instagram_handle, slides, html_slides, html_slide_configs, status
                )
-               VALUES ($1, $2, 'carousel', 'instagram', $3, $4, $5, $6, $7, $8, $9, $10, 'draft')
+               VALUES ($1, $2, 'carousel', 'instagram', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'draft')
                RETURNING id`,
               [
                 tenantId,
@@ -3280,6 +3554,8 @@ export async function registerRoutes(
                 accentColor,
                 instagramHandle,
                 JSON.stringify(slides),
+                htmlSlides && htmlSlides.length > 0 ? JSON.stringify(htmlSlides) : null,
+                htmlSlideConfigs.length > 0 ? JSON.stringify(htmlSlideConfigs) : null,
               ]
             );
 
@@ -3346,12 +3622,14 @@ export async function registerRoutes(
       const pgClient = await getClientForUser(req.userId);
       try {
         const { rows } = await pgClient.query(
-          'SELECT slides FROM creatives WHERE id = $1 AND tenant_id = $2',
+          'SELECT slides, canvas_width as "canvasWidth", canvas_height as "canvasHeight" FROM creatives WHERE id = $1 AND tenant_id = $2',
           [req.params.id, tenantId]
         );
         if (!rows[0]) return res.status(404).json({ message: 'Creative not found' });
 
         const slides = Array.isArray(rows[0].slides) ? rows[0].slides : [];
+        const canvasWidth = Number(rows[0].canvasWidth || 1080);
+        const canvasHeight = Number(rows[0].canvasHeight || 1080);
         if (!slides[slideIndex]) return res.status(404).json({ message: 'Slide not found' });
 
         const current = slides[slideIndex]?.textLayout || { title: '', subtitle: '' };
@@ -3404,12 +3682,14 @@ export async function registerRoutes(
       const pgClient = await getClientForUser(req.userId);
       try {
         const { rows } = await pgClient.query(
-          'SELECT slides FROM creatives WHERE id = $1 AND tenant_id = $2',
+          'SELECT slides, canvas_width as "canvasWidth", canvas_height as "canvasHeight" FROM creatives WHERE id = $1 AND tenant_id = $2',
           [req.params.id, tenantId]
         );
         if (!rows[0]) return res.status(404).json({ message: 'Creative not found' });
 
         const slides = Array.isArray(rows[0].slides) ? rows[0].slides : [];
+        const canvasWidth = Number(rows[0].canvasWidth || 1080);
+        const canvasHeight = Number(rows[0].canvasHeight || 1080);
         if (!slides[slideIndex]) return res.status(404).json({ message: 'Slide not found' });
 
         const current = slides[slideIndex]?.textLayout || { title: '', subtitle: '' };
@@ -3450,16 +3730,19 @@ export async function registerRoutes(
         return res.status(400).json({ message: 'idx invalido' });
       }
 
-      const { styleHint } = req.body || {};
+      const { styleHint, imageModel = 'schnell' } = req.body || {};
+      const safeImageModel = normalizeImageModel(imageModel);
       const pgClient = await getClientForUser(req.userId);
       try {
         const { rows } = await pgClient.query(
-          'SELECT slides FROM creatives WHERE id = $1 AND tenant_id = $2',
+          'SELECT slides, canvas_width as "canvasWidth", canvas_height as "canvasHeight" FROM creatives WHERE id = $1 AND tenant_id = $2',
           [req.params.id, tenantId]
         );
         if (!rows[0]) return res.status(404).json({ message: 'Creative not found' });
 
         const slides = Array.isArray(rows[0].slides) ? rows[0].slides : [];
+        const canvasWidth = Number(rows[0].canvasWidth || 1080);
+        const canvasHeight = Number(rows[0].canvasHeight || 1080);
         if (!slides[slideIndex]) return res.status(404).json({ message: 'Slide not found' });
 
         const title = slides[slideIndex]?.textLayout?.title || `Slide ${slideIndex + 1}`;
@@ -3467,7 +3750,7 @@ export async function registerRoutes(
         // Usa o prompt gerado pelo image-prompt-engineer se disponível, senão usa title+subtitle
         const storedPrompt = slides[slideIndex]?.imagePrompt;
         const imagePrompt = storedPrompt || `${title}. ${subtitle}`;
-        const imageUrl = await generateSlideImage(imagePrompt, styleHint);
+        const imageUrl = await generateSlideImage(imagePrompt, styleHint, canvasWidth, canvasHeight, safeImageModel);
 
         slides[slideIndex] = {
           ...slides[slideIndex],
@@ -3530,6 +3813,7 @@ export async function registerRoutes(
 
       const {
         slides,
+        htmlSlideConfigs,
         status,
         platform,
         layoutMode,
@@ -3540,26 +3824,38 @@ export async function registerRoutes(
       } = req.body;
       const pgClient = await getClientForUser(req.userId);
       try {
+        const normalizedHtmlSlideConfigs = Array.isArray(htmlSlideConfigs)
+          ? (htmlSlideConfigs as HtmlSlideConfig[])
+          : null;
+        const regeneratedHtmlSlides = normalizedHtmlSlideConfigs
+          ? normalizedHtmlSlideConfigs.map((config) => configToHtml(config))
+          : null;
+
         const { rows } = await pgClient.query(
           `UPDATE creatives SET
             slides = COALESCE($1, slides),
-            status = COALESCE($2, status),
-            platform = COALESCE($3, platform),
-            layout_mode = COALESCE($4, layout_mode),
-            font_combination = COALESCE($5, font_combination),
-            accent_color = COALESCE($6, accent_color),
-            instagram_handle = COALESCE($7, instagram_handle),
-            profile_config = COALESCE($8, profile_config),
+            html_slide_configs = COALESCE($2, html_slide_configs),
+            html_slides = COALESCE($3, html_slides),
+            status = COALESCE($4, status),
+            platform = COALESCE($5, platform),
+            layout_mode = COALESCE($6, layout_mode),
+            font_combination = COALESCE($7, font_combination),
+            accent_color = COALESCE($8, accent_color),
+            instagram_handle = COALESCE($9, instagram_handle),
+            profile_config = COALESCE($10, profile_config),
             updated_at = NOW()
-           WHERE id = $9 AND tenant_id = $10
+           WHERE id = $11 AND tenant_id = $12
            RETURNING id, tenant_id as "tenantId", client_id as "clientId", post_id as "postId",
-           template_id as "templateId", type, platform,
+             template_id as "templateId", type, platform, format,
+             canvas_width as "canvasWidth", canvas_height as "canvasHeight",
            layout_mode as "layoutMode", font_combination as "fontCombination",
            accent_color as "accentColor", instagram_handle as "instagramHandle",
-           profile_config as "profileConfig", slides, export_urls as "exportUrls",
+           profile_config as "profileConfig", slides, html_slides as "htmlSlides", html_slide_configs as "htmlSlideConfigs", export_urls as "exportUrls",
            status, created_at as "createdAt", updated_at as "updatedAt"`,
           [
             slides ? JSON.stringify(slides) : null,
+            normalizedHtmlSlideConfigs ? JSON.stringify(normalizedHtmlSlideConfigs) : null,
+            regeneratedHtmlSlides ? JSON.stringify(regeneratedHtmlSlides) : null,
             status,
             platform,
             layoutMode,
@@ -3598,7 +3894,7 @@ export async function registerRoutes(
            template_id as "templateId", type, platform,
            layout_mode as "layoutMode", font_combination as "fontCombination",
            accent_color as "accentColor", instagram_handle as "instagramHandle",
-           profile_config as "profileConfig", slides, export_urls as "exportUrls",
+           profile_config as "profileConfig", slides, html_slides as "htmlSlides", html_slide_configs as "htmlSlideConfigs", export_urls as "exportUrls",
            status, created_at as "createdAt", updated_at as "updatedAt"`,
           [JSON.stringify(exportUrls || []), req.params.id, tenantId]
         );
@@ -3677,11 +3973,139 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/export-slide — converte HTML/CSS em PNG via Satori
+  // Rate limit: 10 exports/min por tenant (Satori é CPU-intensivo)
+  const exportSlideRateLimiter = new Map<string, { count: number; resetAt: number }>();
+
+  app.post("/api/export-slide", async (req: any, res: any) => {
+    try {
+      const tenantId = requireTenantId(req, res);
+      if (!tenantId) return;
+
+      // Rate limiting simples: 10/min por tenant
+      const now = Date.now();
+      const rl = exportSlideRateLimiter.get(tenantId);
+      if (rl && now < rl.resetAt) {
+        if (rl.count >= 10) {
+          return res.status(429).json({ error: 'Rate limit exceeded: máximo 10 exports/min por tenant' });
+        }
+        rl.count++;
+      } else {
+        exportSlideRateLimiter.set(tenantId, { count: 1, resetAt: now + 60_000 });
+      }
+
+      const { html, htmlSlideConfig, slideIndex, creativeId } = req.body;
+
+      const requestedCanvasWidth = typeof htmlSlideConfig?.canvasWidth === 'number' ? htmlSlideConfig.canvasWidth : undefined;
+      const requestedCanvasHeight = typeof htmlSlideConfig?.canvasHeight === 'number' ? htmlSlideConfig.canvasHeight : undefined;
+
+      const resolvedHtml = typeof htmlSlideConfig === 'object' && htmlSlideConfig
+        ? configToHtml(htmlSlideConfig as HtmlSlideConfig)
+        : html;
+
+      if (typeof resolvedHtml !== 'string' || resolvedHtml.length === 0) {
+        return res.status(400).json({ error: 'Campo html ou htmlSlideConfig e obrigatorio' });
+      }
+      if (resolvedHtml.length > 50_000) {
+        return res.status(400).json({ error: 'HTML excede tamanho máximo de 50.000 caracteres' });
+      }
+      if (typeof slideIndex !== 'number') {
+        return res.status(400).json({ error: 'Campo slideIndex é obrigatório' });
+      }
+
+      const { sanitizeSlideHtml } = await import('./utils/html-sanitizer.js');
+      const { htmlToImageBuffer } = await import('./services/html-to-image.js');
+
+      let exportWidth = requestedCanvasWidth || 1080;
+      let exportHeight = requestedCanvasHeight || 1080;
+
+      if ((!requestedCanvasWidth || !requestedCanvasHeight) && creativeId) {
+        const pgClient = await getClientForUser(req.userId);
+        try {
+          const canvasResult = await pgClient.query(
+            `SELECT canvas_width as "canvasWidth", canvas_height as "canvasHeight"
+             FROM creatives
+             WHERE id = $1 AND tenant_id = $2
+             LIMIT 1`,
+            [creativeId, tenantId]
+          );
+
+          if (canvasResult.rows[0]) {
+            exportWidth = Number(canvasResult.rows[0].canvasWidth || exportWidth);
+            exportHeight = Number(canvasResult.rows[0].canvasHeight || exportHeight);
+          }
+        } finally {
+          pgClient.release();
+        }
+      }
+
+      const sanitizedHtml = sanitizeSlideHtml(resolvedHtml);
+      const pngBuffer = await htmlToImageBuffer(sanitizedHtml, {
+        width: exportWidth,
+        height: exportHeight,
+      });
+
+      const fallbackDataUrl = `data:image/png;base64,${pngBuffer.toString('base64')}`;
+
+      const supabaseUrl = process.env.SUPABASE_URL?.trim();
+      const rawServiceKey = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+      const supabaseServiceKey = rawServiceKey.replace(/^['"]|['"]$/g, '');
+
+      if (!supabaseUrl || !supabaseServiceKey) {
+        return res.json({ pngUrl: fallbackDataUrl, slideIndex, storage: 'inline' });
+      }
+
+      const { createClient } = await import('@supabase/supabase-js');
+
+      // Upload para Supabase Storage
+      const supabase = createClient(
+        supabaseUrl,
+        supabaseServiceKey,
+        {
+          auth: {
+            persistSession: false,
+            autoRefreshToken: false,
+          },
+        }
+      );
+
+      const id = creativeId || 'standalone';
+      const storagePath = `${tenantId}/html-slides/${id}/slide-${slideIndex}.png`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('creatives')
+        .upload(storagePath, pngBuffer, {
+          contentType: 'image/png',
+          upsert: true,
+        });
+
+      if (uploadError) {
+        console.error('[export-slide] Storage upload error:', uploadError.message);
+        return res.json({ pngUrl: fallbackDataUrl, slideIndex, storage: 'inline' });
+      }
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('creatives')
+        .getPublicUrl(storagePath);
+
+      res.json({ pngUrl: publicUrl, slideIndex });
+    } catch (err: any) {
+      console.error('[export-slide] Error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Dashboard routes
   registerDashboardRoutes(app);
 
   // Analytics routes
   registerAnalyticsRoutes(app, pool);
+
+  // Client documents / knowledge base routes
+  app.use("/api/clients", clientDocumentsRouter);
+
+  // Client moodboard routes
+  app.use("/api/clients", clientMoodboardRouter);
 
   // Start background worker for async post generation
   startPostWorker(pool);

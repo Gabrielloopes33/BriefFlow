@@ -152,6 +152,10 @@ export class AgentGraph {
     }
 
     for (const edge of this.definition.edges) {
+      if (edge.from === '__start__') {
+        continue;
+      }
+
       inDegree.set(edge.to, (inDegree.get(edge.to) || 0) + 1);
       const preds = predecessors.get(edge.to) || [];
       preds.push(edge.from);
@@ -159,8 +163,6 @@ export class AgentGraph {
     }
 
     const completed = new Set<string>();
-    // __start__ é um nó virtual do ReactFlow — considera sempre completado
-    completed.add('__start__');
 
     // Executa nós em níveis (paralelos quando possível)
     console.log(`[graph-builder] Starting execution. Nodes: ${this.definition.nodes.map(n => n.id).join(', ')}, Edges: ${this.definition.edges.map(e => `${e.from}->${e.to}`).join(', ')}`);

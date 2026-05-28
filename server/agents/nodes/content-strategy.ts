@@ -6,6 +6,7 @@
 
 import { createLLMClient, getDefaultModel } from '../../services/llm-provider';
 import type { AgentState } from '../state';
+import { buildClientContextBlock } from '../prompt-context';
 
 interface ContentStrategyConfig {
   model?: string;
@@ -73,6 +74,7 @@ export async function contentStrategyNode(
 - Taxa média de engajamento: ${state.analyticsInsights!.avgEngagementRate}%
 - Resumo: ${state.analyticsInsights!.insightSummary}`
     : 'Sem dados de analytics disponíveis.';
+  const clientContext = buildClientContextBlock(state);
 
   const userPrompt = `Cliente: ${state.clientName}
 Nicho: ${state.clientNiche || 'não especificado'}
@@ -84,6 +86,8 @@ Idioma: ${state.language}
 Canais: ${state.channels.join(', ')}
 
 ${analyticsContext}
+
+${clientContext}
 
 Com base nesse contexto, defina a melhor estratégia para o carrossel. Retorne APENAS o JSON, sem markdown.`;
 

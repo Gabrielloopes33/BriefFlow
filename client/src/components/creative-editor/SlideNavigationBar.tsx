@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Creative } from '@/lib/creative-editor-types';
 
 interface SlideNavigationBarProps {
@@ -8,6 +8,7 @@ interface SlideNavigationBarProps {
   totalSlides: number;
   onPrev: () => void;
   onNext: () => void;
+  onBackToApp?: () => void;
 }
 
 function getStatusLabel(status: Creative['status']) {
@@ -29,6 +30,7 @@ export function SlideNavigationBar({
   totalSlides,
   onPrev,
   onNext,
+  onBackToApp,
 }: SlideNavigationBarProps) {
   const canGoPrev = currentIndex > 0;
   const canGoNext = currentIndex < totalSlides - 1;
@@ -36,6 +38,14 @@ export function SlideNavigationBar({
   return (
     <div className="h-14 bg-card/70 border-b border-border/60 flex items-center justify-between px-4 flex-shrink-0">
       <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onBackToApp}
+          className="inline-flex items-center gap-1 rounded-lg border border-border/60 bg-secondary/70 px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-secondary"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          Voltar ao app
+        </button>
         <h1 className="text-sm font-semibold text-foreground truncate max-w-xs">
           {creativeId.slice(0, 8)}...
         </h1>

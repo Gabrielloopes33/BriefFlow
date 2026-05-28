@@ -6,6 +6,8 @@ import { useClient } from "@/hooks/use-clients";
 import { useSources, useCreateSource, useDeleteSource } from "@/hooks/use-sources";
 import { useContents } from "@/hooks/use-contents";
 import { useBriefs, useGenerateBrief } from "@/hooks/use-briefs";
+import { DocumentList } from "@/components/knowledge/DocumentList";
+import { MoodboardGrid } from "@/components/moodboard/MoodboardGrid";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -52,6 +54,8 @@ export default function ClientDetails() {
             <TabsTrigger value="sources" className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Sources</TabsTrigger>
             <TabsTrigger value="content" className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Scraped Content</TabsTrigger>
             <TabsTrigger value="briefs" className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Briefs</TabsTrigger>
+            <TabsTrigger value="knowledge" className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Base de Conhecimento</TabsTrigger>
+            <TabsTrigger value="moodboard" className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Moodboard</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6">
@@ -86,6 +90,14 @@ export default function ClientDetails() {
           <TabsContent value="briefs">
             <BriefsTab clientId={clientId} />
           </TabsContent>
+
+          <TabsContent value="knowledge">
+            <KnowledgeTab clientId={clientId} />
+          </TabsContent>
+
+          <TabsContent value="moodboard">
+            <MoodboardTab clientId={clientId} />
+          </TabsContent>
         </Tabs>
       </main>
     </div>
@@ -104,7 +116,7 @@ function SourcesTab({ clientId }: { clientId: string }) {
       <div className="flex justify-between items-center">
         <div>
           <h3 className="text-lg font-bold font-display">Monitoring Sources</h3>
-          <p className="text-sm text-muted-foreground">Blogs, news sites, and feeds to scrape.</p>
+          <p className="text-sm text-muted-foreground">Blogs, news sites, feeds, and files de referência.</p>
         </div>
         <AddSourceDialog clientId={clientId} open={open} onOpenChange={setOpen} />
       </div>
@@ -138,6 +150,14 @@ function SourcesTab({ clientId }: { clientId: string }) {
             No sources added yet.
           </div>
         )}
+      </div>
+
+      <div className="space-y-3 pt-2 border-t border-border/50">
+        <div>
+          <h3 className="text-lg font-bold font-display">Arquivos de referência</h3>
+          <p className="text-sm text-muted-foreground">PDF, MD, DOCX, TXT, CSV e JSON também podem ficar como base do cliente.</p>
+        </div>
+        <DocumentList clientId={clientId} />
       </div>
     </div>
   );
@@ -316,6 +336,34 @@ function BriefsTab({ clientId }: { clientId: string }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function KnowledgeTab({ clientId }: { clientId: string }) {
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="text-lg font-bold font-display">Base de Conhecimento</h3>
+          <p className="text-sm text-muted-foreground">Documentos, guias de marca e referências do cliente.</p>
+        </div>
+      </div>
+      <DocumentList clientId={clientId} />
+    </div>
+  );
+}
+
+function MoodboardTab({ clientId }: { clientId: string }) {
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="text-lg font-bold font-display">Moodboard</h3>
+          <p className="text-sm text-muted-foreground">Referências visuais e identidade do cliente.</p>
+        </div>
+      </div>
+      <MoodboardGrid clientId={clientId} />
     </div>
   );
 }

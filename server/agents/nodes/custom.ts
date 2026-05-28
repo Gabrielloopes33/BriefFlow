@@ -6,6 +6,7 @@
 import { createLLMClient, getDefaultModel } from '../../services/llm-provider';
 import { getClientForUser } from '../../pg-pool';
 import type { AgentState } from '../state';
+import { buildClientContextBlock } from '../prompt-context';
 
 function resolveCompatibleModel(provider: string, configuredModel?: string | null): string {
   const trimmed = configuredModel?.trim();
@@ -57,6 +58,7 @@ export async function customNode(
   const llm = createLLMClient();
   const selectedModel = resolveCompatibleModel(llm.provider, agent.model);
   console.log(`[customNode] Using model: ${selectedModel} (provider=${llm.provider})`);
+  const clientContext = buildClientContextBlock(state);
 
   const systemPrompt = agent.system_prompt || 'Você é um assistente útil.';
   const userPrompt = `Cliente: ${state.clientName} (${state.clientNiche || 'negócio'})
@@ -69,6 +71,7 @@ Máximo aproximado de palavras: ${state.maxWords}
 
 ${state.research ? `Insights da pesquisa:\n${state.research}\n\n` : ''}
 ${state.draft?.content ? `Rascunho atual:\n${state.draft.content}\n\n` : ''}
+${clientContext}
 Execute sua tarefa como ${agent.name}.`;
 
   const result = await llm.chatCompletion({

@@ -7,23 +7,26 @@ interface ClientOption {
   name: string;
 }
 
-interface FiltersValue {
+export interface FiltersValue {
   clientId: string;
   status: string;
   period: "all" | "today" | "week" | "month";
   search: string;
+  tag: string;
+  formatType: string;
 }
 
 interface Props {
   clients: ClientOption[];
   value: FiltersValue;
   onChange: (next: FiltersValue) => void;
+  availableTags?: string[];
 }
 
-export function PostFilters({ clients, value, onChange }: Props) {
+export function PostFilters({ clients, value, onChange, availableTags = [] }: Props) {
   return (
     <div className="space-y-3">
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-4 lg:grid-cols-6">
         <Select
           value={value.clientId}
           onValueChange={(clientId) => onChange({ ...value, clientId })}
@@ -77,6 +80,42 @@ export function PostFilters({ clients, value, onChange }: Props) {
           </SelectContent>
         </Select>
 
+        {availableTags.length > 0 && (
+          <Select
+            value={value.tag}
+            onValueChange={(tag) => onChange({ ...value, tag })}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Tag" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as tags</SelectItem>
+              {availableTags.map((tag) => (
+                <SelectItem key={tag} value={tag}>
+                  {tag}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        <Select
+          value={value.formatType}
+          onValueChange={(formatType) => onChange({ ...value, formatType })}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Formato" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos os formatos</SelectItem>
+            <SelectItem value="carousel">Carrossel</SelectItem>
+            <SelectItem value="reels">Reels</SelectItem>
+            <SelectItem value="static">Estático</SelectItem>
+            <SelectItem value="story">Story</SelectItem>
+            <SelectItem value="text">Texto</SelectItem>
+          </SelectContent>
+        </Select>
+
         <Input
           placeholder="Buscar por título ou conteúdo..."
           value={value.search}
@@ -105,7 +144,7 @@ export function PostFilters({ clients, value, onChange }: Props) {
           type="button"
           variant="ghost"
           size="sm"
-          onClick={() => onChange({ clientId: "all", status: "all", period: "all", search: "" })}
+          onClick={() => onChange({ clientId: "all", status: "all", period: "all", search: "", tag: "all", formatType: "all" })}
         >
           Limpar filtros
         </Button>

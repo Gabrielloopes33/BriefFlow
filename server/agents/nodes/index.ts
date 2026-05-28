@@ -14,6 +14,7 @@ import { customNode } from './custom';
 import { carouselWriterNode } from './carousel-writer';
 import { imagePromptEngineerNode } from './image-prompt-engineer';
 import { contentStrategyNode } from './content-strategy';
+import { htmlSlideGeneratorNode } from './html-slide-generator';
 
 /**
  * Registra todos os nós built-in no registry
@@ -30,8 +31,9 @@ export function registerAllNodes(): void {
   registerNode('content-strategy', contentStrategyNode, 'Define ângulo, pilar e hook do conteúdo antes da pesquisa');
   registerNode('carousel-writer', carouselWriterNode, 'Gera copy de carrossel otimizado para Instagram');
   registerNode('image-prompt-engineer', imagePromptEngineerNode, 'Gera prompts de imagem para cada slide');
+  registerNode('html-slide-generator', htmlSlideGeneratorNode, 'Gera HtmlSlideConfig e HTML deterministico por slide');
 
-  console.log('[node-registry] Registered nodes:', 'researcher, writer, reviewer, metrics-analyst, references, visual-formatter, custom, content-strategy, carousel-writer, image-prompt-engineer');
+  console.log('[node-registry] Registered nodes:', 'researcher, writer, reviewer, metrics-analyst, references, visual-formatter, custom, content-strategy, carousel-writer, image-prompt-engineer, html-slide-generator');
 }
 
 // Re-exporta os nós individuais para uso direto
@@ -45,6 +47,7 @@ export { customNode } from './custom';
 export { contentStrategyNode } from './content-strategy';
 export { carouselWriterNode } from './carousel-writer';
 export { imagePromptEngineerNode } from './image-prompt-engineer';
+export { htmlSlideGeneratorNode } from './html-slide-generator';
 
 // Auto-registra na importação (para compatibilidade com imports diretos)
 registerAllNodes();

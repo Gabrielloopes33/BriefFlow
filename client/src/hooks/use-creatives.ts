@@ -47,8 +47,8 @@ async function regenerateSlideContent(id: string, idx: number, instruction?: str
   return apiPost<RefineSlideResponse>(`${API_BASE}/${id}/slides/${idx}/generate-content`, { instruction });
 }
 
-async function generateSlideImage(id: string, idx: number, styleHint?: string): Promise<{ imageUrl: string }> {
-  return apiPost<{ imageUrl: string }>(`${API_BASE}/${id}/slides/${idx}/generate-image`, { styleHint });
+async function generateSlideImage(id: string, idx: number, styleHint?: string, imageModel?: 'schnell' | 'dev'): Promise<{ imageUrl: string }> {
+  return apiPost<{ imageUrl: string }>(`${API_BASE}/${id}/slides/${idx}/generate-image`, { styleHint, imageModel });
 }
 
 async function generateCaption(id: string, tone?: string): Promise<GenerateCaptionResponse> {
@@ -76,7 +76,7 @@ export function useUpdateCreative() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<Creative> }) => updateCreative(id, data),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['creative', data.id] });
+      queryClient.setQueryData(['creative', data.id], data);
       queryClient.invalidateQueries({ queryKey: ['creatives'] });
     },
   });
@@ -142,8 +142,8 @@ export function useRegenerateSlideContent() {
 export function useGenerateSlideImage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, idx, styleHint }: { id: string; idx: number; styleHint?: string }) =>
-      generateSlideImage(id, idx, styleHint),
+    mutationFn: ({ id, idx, styleHint, imageModel }: { id: string; idx: number; styleHint?: string; imageModel?: 'schnell' | 'dev' }) =>
+      generateSlideImage(id, idx, styleHint, imageModel),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['creative', variables.id] });
     },

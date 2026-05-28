@@ -16,7 +16,7 @@ import type {
   SlideImageGrid,
   SlideProfileBadge,
   FontFamily,
-} from '../shared/schema';
+} from '../client/src/lib/creative-editor-types';
 
 // Re-export types that exist in shared/schema
 export type { SlideBackground, SlideOverlay, SlideTextLayout, SlideTypography };
@@ -669,7 +669,8 @@ export const SLIDE_TEMPLATES: SlideTemplate[] = [
  */
 export function selectTemplateForSlide(
   index: number,
-  layoutMode: 'minimalist' | 'profile' | 'editorial' | 'bold' | 'split' | 'cinematic' | 'twitter'
+  layoutMode: 'minimalist' | 'profile' | 'editorial' | 'bold' | 'split' | 'cinematic' | 'twitter',
+  seed = ''
 ): SlideTemplate {
   // For profile mode, prefer templates that don't conflict with left panel
   const profileSafeTemplates = [
@@ -683,7 +684,10 @@ export function selectTemplateForSlide(
   ];
 
   const pool = layoutMode === 'profile' ? profileSafeTemplates : SLIDE_TEMPLATES;
-  return pool[index % pool.length];
+  const normalizedSeed = String(seed || 'default');
+  const seedHash = normalizedSeed.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const offset = seedHash % pool.length;
+  return pool[(index + offset) % pool.length];
 }
 
 /**
@@ -696,6 +700,7 @@ export function buildSlideFromTemplate(params: {
   title: string;
   subtitle: string;
   accentColor: string;
+  templateSeed?: string;
   layoutMode: 'minimalist' | 'profile' | 'editorial' | 'bold' | 'split' | 'cinematic' | 'twitter';
   imageMode: 'background' | 'grid' | 'both';
   imageUrl?: string;
@@ -711,7 +716,7 @@ export function buildSlideFromTemplate(params: {
   profileBadge: any;
   layers: any[];
 } {
-  const template = selectTemplateForSlide(params.index, params.layoutMode);
+  const template = selectTemplateForSlide(params.index, params.layoutMode, params.templateSeed);
   const theme = params.index % 2 === 0 ? 'dark' : 'light';
   const isProfileMode = params.layoutMode === 'profile';
   const titleFont = (params.fontCombination?.title as FontFamily) || 'Space';

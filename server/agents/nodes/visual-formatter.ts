@@ -1,11 +1,13 @@
 /**
  * Nó Visual Formatter — Estrutura conteúdo em slides JSONB
- * Analisa o draft gerado pelo Writer e transforma em slides prontos para o editor Konva
+ * Analisa o draft gerado pelo Writer e transforma em slides prontos para persistência.
  */
 
 import { pool } from '../../pg-pool';
 import { createLLMClient, getDefaultModel } from '../../services/llm-provider';
 import type { AgentState } from '../state';
+import { buildClientContextBlock } from '../prompt-context';
+import { htmlSlideGeneratorNode } from './html-slide-generator';
 
 export interface SlideContent {
   slideIndex: number;
@@ -15,80 +17,20 @@ export interface SlideContent {
 }
 
 /**
- * Sugere o template mais adequado baseado no conteúdo e objetivo
- */
-export function suggestTemplate(content: string, goal: string): string {
-  const lowerContent = (content || '').toLowerCase();
-  const lowerGoal = (goal || '').toLowerCase();
-
-  if (lowerContent.includes('dica') || lowerContent.includes('passo') || lowerContent.includes('lista')) {
-    return 'carousel-lista';
-  }
-  if (lowerContent.includes('antes') && lowerContent.includes('depois')) {
-    return 'antes-e-depois';
-  }
-  if (lowerContent.includes('resultado') || lowerContent.includes('case') || lowerContent.includes('cliente')) {
-    return 'carousel-case';
-  }
-  if (lowerGoal.includes('citação') || lowerGoal.includes('quote') || lowerGoal.includes('frase')) {
-    return 'quote';
-  }
-  if (lowerGoal.includes('único') || lowerGoal.includes('impacto') || lowerGoal.includes('single')) {
-    return 'post-unico';
-  }
-  return 'carousel-educativo'; // default
-}
-
-/**
- * Busca o ID do template pelo nome/slug no banco
- */
-async function findTemplateId(templateName: string): Promise<string | null> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id FROM creative_templates
-       WHERE is_global = true AND is_active = true
-       AND (
-         LOWER(name) LIKE $1 OR
-         LOWER(name) LIKE $2 OR
-         LOWER(name) LIKE $3
-       )
-       LIMIT 1`,
-      [`%${templateName}%`, '%educativo%', '%impacto%']
-    );
-    return rows[0]?.id || null;
-  } catch (error) {
-    console.error('[visual-formatter] Error finding template:', error);
-    return null;
-  }
-}
-
-/**
  * Cria um registro em creatives com os slides preenchidos
  */
 async function createCreative(
   state: AgentState,
-  slides: SlideContent[],
-  templateId: string | null
+  slides: SlideContent[]
 ): Promise<string | null> {
   try {
-    // Busca a estrutura do template para preencher as camadas
-    let templateStructure: any = null;
-    if (templateId) {
-      const { rows } = await pool.query(
-        `SELECT structure FROM creative_templates WHERE id = $1`,
-        [templateId]
-      );
-      templateStructure = rows[0]?.structure;
-    }
+    const creativeSlides = createSimpleSlides(slides);
 
-    // Se não tem template, cria slides simples
-    const creativeSlides = templateStructure?.slides
-      ? fillTemplateSlides(templateStructure.slides, slides)
-      : createSimpleSlides(slides);
+    const htmlSlides = (state as any).htmlSlides as string[] | undefined;
 
     const { rows } = await pool.query(
-      `INSERT INTO creatives (tenant_id, client_id, type, platform, format, canvas_width, canvas_height, slides, status, template_id)
-       VALUES ($1, $2, $3, $4, 'portrait', 1080, 1350, $5, 'draft', $6)
+      `INSERT INTO creatives (tenant_id, client_id, type, platform, format, canvas_width, canvas_height, slides, html_slides, status)
+       VALUES ($1, $2, $3, $4, 'portrait', 1080, 1350, $5, $6, 'draft')
        RETURNING id`,
       [
         state.tenantId,
@@ -96,7 +38,7 @@ async function createCreative(
         slides.length > 1 ? 'carousel' : 'single',
         state.channels.includes('linkedin') ? 'linkedin' : 'instagram',
         JSON.stringify(creativeSlides),
-        templateId,
+        htmlSlides && htmlSlides.length > 0 ? JSON.stringify(htmlSlides) : null,
       ]
     );
 
@@ -105,36 +47,6 @@ async function createCreative(
     console.error('[visual-formatter] Error creating creative:', error);
     return null;
   }
-}
-
-/**
- * Preenche as camadas de um template com o conteúdo dos slides
- */
-function fillTemplateSlides(templateSlides: any[], slideContents: SlideContent[]): any[] {
-  return templateSlides.map((tplSlide: any, index: number) => {
-    const content = slideContents[index];
-    if (!content) return tplSlide;
-
-    const filledLayers = tplSlide.layers.map((layer: any) => {
-      if (layer.type !== 'text') return layer;
-
-      // Substitui placeholders
-      let text = layer.text || '';
-      if (text.includes('{{headline}}')) {
-        text = text.replace('{{headline}}', content.headline);
-      }
-      if (text.includes('{{body}}')) {
-        text = text.replace('{{body}}', content.body);
-      }
-      if (text.includes('{{cta}}')) {
-        text = text.replace('{{cta}}', content.body);
-      }
-
-      return { ...layer, text };
-    });
-
-    return { ...tplSlide, layers: filledLayers };
-  });
 }
 
 /**
@@ -186,13 +98,16 @@ function createSimpleSlides(slideContents: SlideContent[]): any[] {
  */
 async function structureSlidesWithLLM(
   draft: AgentState['draft'],
-  templateType: string
+  templateType: string,
+  clientContext: string
 ): Promise<SlideContent[]> {
   const llm = createLLMClient();
   const model = getDefaultModel();
 
   const prompt = `
 Você recebeu um post para transformar em slides de carrossel para Instagram.
+
+${clientContext}
 
 TÍTULO: ${draft.title}
 CONTEÚDO: ${draft.content}
@@ -303,16 +218,28 @@ export async function visualFormatterNode(
 
   try {
     // Se já tem slides prontos (ex: do carousel-writer), usa diretamente
-    if (state.slides && state.slides.length > 0 && mode === 'studio') {
-      console.log(`[visual-formatter] Using pre-generated slides (${state.slides.length}) in studio mode`);
+    if (state.slides && state.slides.length > 0) {
+      console.log(`[visual-formatter] Using pre-generated slides (${state.slides.length})`);
+      const htmlResult = await htmlSlideGeneratorNode(state);
       const latency = Date.now() - startTime;
-      return {
+      const sharedOutput: Partial<AgentState> = {
         slides: state.slides,
+        htmlSlideConfigs: htmlResult.htmlSlideConfigs,
+        htmlSlides: htmlResult.htmlSlides,
         metadata: {
           ...state.metadata,
           totalLatency: state.metadata.totalLatency + latency,
           models: [...state.metadata.models, 'visual-formatter'],
         },
+      };
+
+      if (mode === 'studio') {
+        return sharedOutput;
+      }
+
+      return {
+        ...sharedOutput,
+        creativeId: undefined,
       };
     }
 
@@ -322,18 +249,12 @@ export async function visualFormatterNode(
       return mode === 'studio' ? { slides: [] } : { creativeId: undefined };
     }
 
-    // 1. Sugere template
-    const suggestedType = suggestTemplate(state.draft.content, state.goal);
-    console.log(`[visual-formatter] Suggested template: ${suggestedType}`);
+    const templateType = 'carousel-educativo';
 
-    // 2. Busca template no banco
-    const templateId = await findTemplateId(suggestedType);
-    console.log(`[visual-formatter] Template ID: ${templateId || 'none (fallback)'}`);
-
-    // 3. Estrutura slides via LLM ou fallback
+    // Estrutura slides via LLM ou fallback
     let slideContents: SlideContent[];
     try {
-      slideContents = await structureSlidesWithLLM(state.draft, suggestedType);
+      slideContents = await structureSlidesWithLLM(state.draft, templateType, buildClientContextBlock(state));
       console.log(`[visual-formatter] LLM structured ${slideContents.length} slides`);
     } catch (llmError) {
       console.warn('[visual-formatter] LLM failed, using fallback:', llmError);
@@ -358,7 +279,7 @@ export async function visualFormatterNode(
     }
 
     // Modo database (padrão): cria registro em creatives
-    const creativeId = await createCreative(state, slideContents, templateId);
+    const creativeId = await createCreative(state, slideContents);
 
     if (!creativeId) {
       console.warn('[visual-formatter] Failed to create creative, but job continues');

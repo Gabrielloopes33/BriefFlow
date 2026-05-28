@@ -40,7 +40,7 @@ export interface WebSocketMessage {
  * Filtro de eventos por jobId
  */
 export function isEventForJob(event: JobEvent, jobId: string): boolean {
-  return event.jobId === jobId;
+  return 'jobId' in event && event.jobId === jobId;
 }
 
 /**

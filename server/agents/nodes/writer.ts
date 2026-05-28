@@ -5,6 +5,7 @@
 
 import { createLLMClient, getDefaultModel } from '../../services/llm-provider';
 import type { AgentState } from '../state';
+import { buildClientContextBlock } from '../prompt-context';
 
 interface WriterConfig {
   model?: string;
@@ -35,6 +36,7 @@ Regras:
    Título: [título do post]
    
    [corpo do texto]`;
+  const clientContext = buildClientContextBlock(state);
 
   const userPrompt = `Cliente: ${state.clientName} (${state.clientNiche || 'negócio'})
 Descrição: ${state.clientDescription || 'N/A'}
@@ -45,7 +47,7 @@ Canais: ${state.channels.join(', ')}
 Tema sugerido: ${state.titleHint}
 Máximo aproximado de palavras: ${state.maxWords}
 
-${state.research ? `Insights da pesquisa:\n${state.research}\n\n` : ''}${state.analyticsInsights?.dataSource !== 'empty' ? `Insights de performance do cliente:\n${state.analyticsInsights!.insightSummary}\nFormatos que funcionam: ${state.analyticsInsights!.topFormats.join(', ')}\nMelhores horários: ${state.analyticsInsights!.bestPostingHours.join(', ')}\n\n` : ''}${state.references?.length ? `Referências relevantes:\n${state.references.map(r => `- ${r.title}: ${r.summary} (Ângulo: ${r.angle})`).join('\n')}\n\n` : ''}
+${clientContext}${state.research ? `Insights da pesquisa:\n${state.research}\n\n` : ''}${state.analyticsInsights?.dataSource !== 'empty' ? `Insights de performance do cliente:\n${state.analyticsInsights!.insightSummary}\nFormatos que funcionam: ${state.analyticsInsights!.topFormats.join(', ')}\nMelhores horários: ${state.analyticsInsights!.bestPostingHours.join(', ')}\n\n` : ''}${state.references?.length ? `Referências relevantes:\n${state.references.map(r => `- ${r.title}: ${r.summary} (Ângulo: ${r.angle})`).join('\n')}\n\n` : ''}
 Escreva o post completo.`;
 
   try {

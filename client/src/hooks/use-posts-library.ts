@@ -13,6 +13,9 @@ export type LibraryPostStatus =
   | "rejected";
 export type LibraryPeriod = "all" | "today" | "week" | "month";
 
+export type PostFormatType = "carousel" | "reels" | "static" | "story" | "text";
+export type ColorLabel = "red" | "yellow" | "green" | "blue" | "purple" | "pink" | null;
+
 export interface LibraryPostItem {
   id: string;
   client_id: string;
@@ -24,6 +27,10 @@ export interface LibraryPostItem {
   scheduled_for?: string | null;
   stage_tag?: string | null;
   kanban_order?: number | null;
+  tags?: string[];
+  format_type?: PostFormatType;
+  notes?: string | null;
+  color_label?: ColorLabel;
   created_at: string;
   updated_at: string;
   status_updated_at?: string | null;
@@ -58,6 +65,8 @@ export interface LibraryFilters {
   status: string;
   period: LibraryPeriod;
   search: string;
+  tag?: string;
+  formatType?: string;
 }
 
 interface UpdatePostStatusPayload {
@@ -78,6 +87,8 @@ function buildPostsQuery(filters: LibraryFilters, page: number, limit: number): 
   if (filters.status && filters.status !== "all") params.set("status", filters.status);
   if (filters.period && filters.period !== "all") params.set("period", filters.period);
   if (filters.search.trim().length > 0) params.set("search", filters.search.trim());
+  if (filters.tag && filters.tag !== "all") params.set("tag", filters.tag);
+  if (filters.formatType && filters.formatType !== "all") params.set("formatType", filters.formatType);
 
   return `/api/posts?${params.toString()}`;
 }
@@ -116,6 +127,40 @@ export function useUpdatePostStatus() {
       queryClient.invalidateQueries({ queryKey: ["posts-library"] });
       queryClient.setQueryData(["post-detail", data.id], data);
     },
+  });
+}
+
+interface UpdatePostPayload {
+  title?: string | null;
+  content?: string | null;
+  scheduled_for?: string | null;
+  stage_tag?: string | null;
+  kanban_order?: number | null;
+  tags?: string[];
+  format_type?: PostFormatType;
+  notes?: string | null;
+  color_label?: ColorLabel;
+}
+
+export function useUpdatePost() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ postId, payload }: { postId: string; payload: UpdatePostPayload }) => {
+      return apiPut<LibraryPostDetail>(`/api/posts/${postId}`, payload);
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["posts-library"] });
+      queryClient.setQueryData(["post-detail", data.id], data);
+    },
+  });
+}
+
+export function usePostTags(tenantId: string) {
+  return useQuery({
+    queryKey: ["post-tags", tenantId],
+    queryFn: () => apiGet<string[]>(`/api/posts/tags?tenantId=${tenantId}`),
+    enabled: !!tenantId,
   });
 }
 

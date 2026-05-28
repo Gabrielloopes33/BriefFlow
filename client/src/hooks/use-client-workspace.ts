@@ -22,6 +22,10 @@ export interface WorkspacePostItem {
   scheduled_for: string | null;
   stage_tag: string | null;
   kanban_order: number | null;
+  tags?: string[];
+  format_type?: string | null;
+  notes?: string | null;
+  color_label?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -77,18 +81,34 @@ export interface CollaborationMessage {
   created_at: string;
 }
 
-function buildCalendarUrl(clientId: string, view: "week" | "month", from?: string, to?: string) {
+function buildCalendarUrl(
+  clientId: string,
+  view: "week" | "month",
+  from?: string,
+  to?: string,
+  includeArchived = false,
+  formatType?: string
+) {
   const params = new URLSearchParams();
   params.set("view", view);
   if (from) params.set("from", from);
   if (to) params.set("to", to);
+  if (includeArchived) params.set("include_archived", "true");
+  if (formatType && formatType !== "all") params.set("format_type", formatType);
   return `/api/clients/${clientId}/posts/calendar?${params.toString()}`;
 }
 
-export function useClientCalendar(clientId: string, view: "week" | "month", from?: string, to?: string) {
+export function useClientCalendar(
+  clientId: string,
+  view: "week" | "month",
+  from?: string,
+  to?: string,
+  includeArchived = false,
+  formatType?: string
+) {
   return useQuery({
-    queryKey: ["client-calendar", clientId, view, from, to],
-    queryFn: () => apiGet<CalendarResponse>(buildCalendarUrl(clientId, view, from, to)),
+    queryKey: ["client-calendar", clientId, view, from, to, includeArchived, formatType || "all"],
+    queryFn: () => apiGet<CalendarResponse>(buildCalendarUrl(clientId, view, from, to, includeArchived, formatType)),
     enabled: !!clientId,
   });
 }
@@ -104,6 +124,61 @@ export function useClientKanban(clientId: string) {
 export function useBatchUpdateWorkspacePosts(clientId: string) {
   const queryClient = useQueryClient();
 
+  function buildCalendarBuckets(items: WorkspacePostItem[]): Record<string, WorkspacePostItem[]> {
+    const buckets: Record<string, WorkspacePostItem[]> = {};
+    for (const item of items) {
+      const dateSource = item.scheduled_for || item.created_at;
+      const key = new Date(dateSource).toISOString().slice(0, 10);
+      if (!buckets[key]) buckets[key] = [];
+      buckets[key].push(item);
+    }
+    return buckets;
+  }
+
+  function applyUpdatedItems(updatedItems: WorkspacePostItem[]) {
+    if (updatedItems.length === 0) return;
+
+    const updatedById = new Map(updatedItems.map((item) => [item.id, item]));
+
+    const currentKanban = queryClient.getQueryData<KanbanResponse>(["client-kanban", clientId]);
+    if (currentKanban) {
+      const nextColumns = currentKanban.columns.map((column) => ({
+        ...column,
+        items: column.items
+          .map((item) => updatedById.get(item.id) || item)
+          .filter((item) => item.status === column.id),
+      }));
+
+      queryClient.setQueryData<KanbanResponse>(["client-kanban", clientId], {
+        ...currentKanban,
+        columns: nextColumns,
+      });
+    }
+
+    const currentPostsList = queryClient.getQueryData<WorkspacePostItem[]>(["client-posts-list", clientId]);
+    if (currentPostsList) {
+      queryClient.setQueryData<WorkspacePostItem[]>(
+        ["client-posts-list", clientId],
+        currentPostsList.map((item) => updatedById.get(item.id) || item)
+      );
+    }
+
+    const previousCalendarQueries = queryClient.getQueriesData<CalendarResponse>({
+      queryKey: ["client-calendar", clientId],
+    });
+
+    for (const [key, previousCalendar] of previousCalendarQueries) {
+      if (!previousCalendar) continue;
+
+      const nextItems = previousCalendar.items.map((item) => updatedById.get(item.id) || item);
+      queryClient.setQueryData<CalendarResponse>(key, {
+        ...previousCalendar,
+        items: nextItems,
+        buckets: buildCalendarBuckets(nextItems),
+      });
+    }
+  }
+
   return useMutation({
     mutationFn: (payload: {
       post_ids: string[];
@@ -114,9 +189,13 @@ export function useBatchUpdateWorkspacePosts(clientId: string) {
     onMutate: async (payload) => {
       await queryClient.cancelQueries({ queryKey: ["client-kanban", clientId] });
       await queryClient.cancelQueries({ queryKey: ["client-posts-list", clientId] });
+      await queryClient.cancelQueries({ queryKey: ["client-calendar", clientId] });
 
       const previousKanban = queryClient.getQueryData<KanbanResponse>(["client-kanban", clientId]);
       const previousPostsList = queryClient.getQueryData<WorkspacePostItem[]>(["client-posts-list", clientId]);
+      const previousCalendarQueries = queryClient.getQueriesData<CalendarResponse>({
+        queryKey: ["client-calendar", clientId],
+      });
 
       if (previousKanban) {
         const movedIds = new Set(payload.post_ids);
@@ -178,9 +257,37 @@ export function useBatchUpdateWorkspacePosts(clientId: string) {
         );
       }
 
+      if (previousCalendarQueries.length > 0) {
+        const movedIds = new Set(payload.post_ids);
+        const now = new Date().toISOString();
+
+        for (const [key, previousCalendar] of previousCalendarQueries) {
+          if (!previousCalendar) continue;
+
+          const nextItems = previousCalendar.items.map((item) => {
+            if (!movedIds.has(item.id)) return item;
+
+            return {
+              ...item,
+              status: payload.status ?? item.status,
+              stage_tag: payload.stage_tag ?? item.stage_tag,
+              scheduled_for: payload.scheduled_for ?? item.scheduled_for,
+              updated_at: now,
+            };
+          });
+
+          queryClient.setQueryData<CalendarResponse>(key, {
+            ...previousCalendar,
+            items: nextItems,
+            buckets: buildCalendarBuckets(nextItems),
+          });
+        }
+      }
+
       return {
         previousKanban,
         previousPostsList,
+        previousCalendarQueries,
       };
     },
     onError: (_error, _payload, context) => {
@@ -190,8 +297,14 @@ export function useBatchUpdateWorkspacePosts(clientId: string) {
       if (context?.previousPostsList) {
         queryClient.setQueryData(["client-posts-list", clientId], context.previousPostsList);
       }
+      if (context?.previousCalendarQueries) {
+        for (const [key, value] of context.previousCalendarQueries) {
+          queryClient.setQueryData(key, value);
+        }
+      }
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      applyUpdatedItems(data.items || []);
       queryClient.invalidateQueries({ queryKey: ["client-kanban", clientId] });
       queryClient.invalidateQueries({ queryKey: ["client-calendar", clientId] });
       queryClient.invalidateQueries({ queryKey: ["client-posts-list", clientId] });

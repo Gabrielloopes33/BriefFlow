@@ -13,7 +13,6 @@ import { cn } from '@/lib/utils';
 type WorkspaceTab =
   | 'overview'
   | 'sources'
-  | 'contents'
   | 'calendar'
   | 'kanban'
   | 'collaboration'
@@ -23,7 +22,6 @@ type WorkspaceTab =
 const tabs: { id: WorkspaceTab; label: string; icon: any }[] = [
   { id: 'overview', label: 'Visão Geral', icon: Sparkles },
   { id: 'sources', label: 'Fontes', icon: () => null },
-  { id: 'contents', label: 'Conteúdos', icon: () => null },
   { id: 'calendar', label: 'Calendário', icon: () => null },
   { id: 'kanban', label: 'Kanban', icon: () => null },
   { id: 'collaboration', label: 'Colaboração', icon: () => null },
@@ -33,7 +31,6 @@ const tabs: { id: WorkspaceTab; label: string; icon: any }[] = [
 
 interface ClientWorkspaceProps {
   sourcesTab?: React.ComponentType<{ clientId: string }>;
-  contentsTab?: React.ComponentType<{ clientId: string }>;
   calendarTab?: React.ComponentType<{ clientId: string }>;
   kanbanTab?: React.ComponentType<{ clientId: string }>;
   collaborationTab?: React.ComponentType<{ clientId: string }>;
@@ -43,7 +40,6 @@ interface ClientWorkspaceProps {
 
 export function ClientWorkspace({
   sourcesTab: SourcesTabComponent,
-  contentsTab: ContentsTabComponent,
   calendarTab: CalendarTabComponent,
   kanbanTab: KanbanTabComponent,
   collaborationTab: CollaborationTabComponent,
@@ -53,18 +49,23 @@ export function ClientWorkspace({
   const { clientId } = useParams();
   useWorkspaceRealtime(clientId || null);
   const [location] = useLocation();
-  const searchParams = new URLSearchParams(location.split('?')[1] || '');
   const { setActiveClient } = useClientContext();
 
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('overview');
 
   // Sincroniza tab com URL params
   useEffect(() => {
+    const searchParams = new URLSearchParams(location.split('?')[1] || '');
     const tabParam = searchParams.get('tab') as WorkspaceTab;
     if (tabParam && tabs.find(t => t.id === tabParam)) {
       setActiveTab(tabParam);
+      return;
     }
-  }, [searchParams]);
+
+    if (location.endsWith('/calendar')) {
+      setActiveTab('calendar');
+    }
+  }, [location]);
 
   // Define cliente ativo ao carregar workspace
   useEffect(() => {
@@ -79,8 +80,6 @@ export function ClientWorkspace({
         return <OverviewTab clientId={clientId!} />;
       case 'sources':
         return SourcesTabComponent ? <SourcesTabComponent clientId={clientId!} /> : null;
-      case 'contents':
-        return ContentsTabComponent ? <ContentsTabComponent clientId={clientId!} /> : null;
       case 'calendar':
         return CalendarTabComponent ? <CalendarTabComponent clientId={clientId!} /> : null;
       case 'kanban':

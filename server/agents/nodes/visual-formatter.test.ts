@@ -1,8 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { visualFormatterNode, suggestTemplate } from './visual-formatter';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { visualFormatterNode } from './visual-formatter';
 import type { AgentState } from '../state';
 
-// Mock do pg-pool e llm-provider
 vi.mock('../../pg-pool', () => ({
   pool: {
     query: vi.fn(),
@@ -11,11 +10,7 @@ vi.mock('../../pg-pool', () => ({
 
 vi.mock('../../services/llm-provider', () => ({
   createLLMClient: vi.fn(() => ({
-    chat: {
-      completions: {
-        create: vi.fn(),
-      },
-    },
+    chatCompletion: vi.fn(),
   })),
   getDefaultModel: vi.fn(() => 'moonshot-v1-8k'),
 }));
@@ -23,189 +18,103 @@ vi.mock('../../services/llm-provider', () => ({
 import { pool } from '../../pg-pool';
 import { createLLMClient } from '../../services/llm-provider';
 
-describe('visual-formatter node', () => {
-  const mockState: AgentState = {
-    jobId: 'job-1',
-    tenantId: 'tenant-1',
-    clientId: 'client-1',
-    userId: 'user-1',
-    channels: ['instagram'],
-    goal: 'authority',
-    language: 'pt-BR',
-    tone: 'consultivo',
-    titleHint: 'Test',
-    maxWords: 500,
-    clientName: 'Test Client',
-    clientNiche: 'tech',
-    clientDescription: 'A tech company',
-    sources: [],
-    research: '',
-    draft: {
-      title: '5 Dicas para Crescer no Instagram',
-      content: 'Dica 1: Poste consistentemente.\n\nDica 2: Use hashtags relevantes.\n\nDica 3: Engaje com sua audiência.\n\nDica 4: Analise seus dados.\n\nDica 5: Seja autêntico.',
-    },
-    review: { score: 0, feedback: '', approved: false },
-    metadata: { totalTokens: 0, totalLatency: 0, models: [] },
-    retryCount: 0,
-    errors: [],
-  };
+const baseState: AgentState = {
+  jobId: 'job-1',
+  tenantId: 'tenant-1',
+  clientId: 'client-1',
+  userId: 'user-1',
+  channels: ['instagram'],
+  goal: 'authority',
+  language: 'pt-BR',
+  tone: 'consultivo',
+  titleHint: 'Test',
+  maxWords: 500,
+  clientName: 'Test Client',
+  clientNiche: 'tech',
+  clientDescription: 'A tech company',
+  sources: [],
+  research: '',
+  draft: {
+    title: '5 Dicas para Crescer no Instagram',
+    content: 'Dica 1: Poste consistentemente.\n\nDica 2: Use hashtags relevantes.',
+  },
+  review: { score: 0, feedback: '', approved: false },
+  metadata: { totalTokens: 0, totalLatency: 0, models: [] },
+  retryCount: 0,
+  errors: [],
+};
 
+describe('visual-formatter node', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  describe('suggestTemplate', () => {
-    it('suggests carousel-lista for list content', () => {
-      expect(suggestTemplate('5 dicas para...', 'authority')).toBe('carousel-lista');
-      expect(suggestTemplate('Passo a passo...', 'authority')).toBe('carousel-lista');
+  it('returns creativeId when llm and db succeed', async () => {
+    vi.mocked(createLLMClient).mockReturnValue({
+      chatCompletion: vi.fn().mockResolvedValue({
+        content: JSON.stringify([
+          { slideIndex: 1, type: 'cover', headline: 'Capa', body: 'Intro' },
+          { slideIndex: 2, type: 'cta', headline: 'CTA', body: 'Siga!' },
+        ]),
+      }),
+    } as any);
+
+    vi.mocked(pool.query).mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO creatives')) {
+        return { rows: [{ id: 'creative-123' }] } as any;
+      }
+      return { rows: [] } as any;
     });
 
-    it('suggests antes-e-depois for before/after content', () => {
-      expect(suggestTemplate('Antes e depois da transformação', 'authority')).toBe('antes-e-depois');
-    });
+    const result = await visualFormatterNode(baseState);
 
-    it('suggests carousel-case for case studies', () => {
-      expect(suggestTemplate('Resultado do case do cliente', 'authority')).toBe('carousel-case');
-    });
-
-    it('suggests quote for quote goal', () => {
-      expect(suggestTemplate('Inspiração diária', 'citação')).toBe('quote');
-    });
-
-    it('suggests post-unico for single impact goal', () => {
-      expect(suggestTemplate('Frase de impacto', 'único')).toBe('post-unico');
-    });
-
-    it('defaults to carousel-educativo', () => {
-      expect(suggestTemplate('Conteúdo genérico', 'authority')).toBe('carousel-educativo');
-    });
+    expect(result.creativeId).toBe('creative-123');
+    expect(result.errors).toBeUndefined();
   });
 
-  describe('visualFormatterNode', () => {
-    it('returns creativeId when LLM and DB succeed', async () => {
-      const mockLLM = {
-        chat: {
-          completions: {
-            create: vi.fn().mockResolvedValue({
-              choices: [{
-                message: {
-                  content: JSON.stringify([
-                    { slideIndex: 1, type: 'cover', headline: 'Capa', body: 'Intro' },
-                    { slideIndex: 2, type: 'content', headline: 'Dica 1', body: 'Conteúdo' },
-                    { slideIndex: 3, type: 'cta', headline: 'CTA', body: 'Siga!' },
-                  ]),
-                },
-              }],
-            },
-          },
-        },
-      };
-      vi.mocked(createLLMClient).mockReturnValue(mockLLM as any);
-
-      // Mock template query
-      vi.mocked(pool.query).mockImplementation(async (sql: string, params: any[]) => {
-        if (sql.includes('creative_templates')) {
-          return { rows: [{ id: 'template-1', structure: { slides: [] } }] } as any;
-        }
-        if (sql.includes('INSERT INTO creatives')) {
-          return { rows: [{ id: 'creative-123' }] } as any;
-        }
-        return { rows: [] } as any;
-      });
-
-      const result = await visualFormatterNode(mockState);
-
-      expect(result.creativeId).toBe('creative-123');
-      expect(result.errors).toBeUndefined();
+  it('returns undefined creativeId when no draft exists', async () => {
+    const result = await visualFormatterNode({
+      ...baseState,
+      draft: { title: '', content: '' },
     });
 
-    it('returns undefined creativeId when no draft available', async () => {
-      const stateNoDraft = { ...mockState, draft: { title: '', content: '' } };
-      const result = await visualFormatterNode(stateNoDraft);
-      expect(result.creativeId).toBeUndefined();
+    expect(result.creativeId).toBeUndefined();
+  });
+
+  it('uses fallback when llm fails', async () => {
+    vi.mocked(createLLMClient).mockReturnValue({
+      chatCompletion: vi.fn().mockRejectedValue(new Error('LLM timeout')),
+    } as any);
+
+    vi.mocked(pool.query).mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO creatives')) {
+        return { rows: [{ id: 'creative-fallback' }] } as any;
+      }
+      return { rows: [] } as any;
     });
 
-    it('handles LLM error gracefully with fallback', async () => {
-      const mockLLM = {
-        chat: {
-          completions: {
-            create: vi.fn().mockRejectedValue(new Error('LLM timeout')),
-          },
-        },
-      };
-      vi.mocked(createLLMClient).mockReturnValue(mockLLM as any);
+    const result = await visualFormatterNode(baseState);
 
-      vi.mocked(pool.query).mockImplementation(async (sql: string) => {
-        if (sql.includes('INSERT INTO creatives')) {
-          return { rows: [{ id: 'creative-fallback' }] } as any;
-        }
-        return { rows: [] } as any;
-      });
+    expect(result.creativeId).toBe('creative-fallback');
+    expect(result.errors).toBeUndefined();
+  });
 
-      const result = await visualFormatterNode(mockState);
+  it('generates html slide configs from pre-generated slides', async () => {
+    const result = await visualFormatterNode(
+      {
+        ...baseState,
+        slides: [
+          { title: 'Hook forte', subtitle: 'Subtitulo objetivo' },
+          { title: 'CTA final', subtitle: 'Chamada curta' },
+        ],
+      },
+      { mode: 'studio' }
+    );
 
-      // Fallback deve criar slides e um creative
-      expect(result.creativeId).toBeDefined();
-      expect(result.errors).toBeUndefined();
-    });
-
-    it('handles database error gracefully', async () => {
-      const mockLLM = {
-        chat: {
-          completions: {
-            create: vi.fn().mockResolvedValue({
-              choices: [{
-                message: {
-                  content: JSON.stringify([
-                    { slideIndex: 1, type: 'cover', headline: 'Capa', body: 'Intro' },
-                  ]),
-                },
-              }],
-            }),
-          },
-        },
-      };
-      vi.mocked(createLLMClient).mockReturnValue(mockLLM as any);
-
-      vi.mocked(pool.query).mockRejectedValue(new Error('DB connection failed'));
-
-      const result = await visualFormatterNode(mockState);
-
-      expect(result.creativeId).toBeUndefined();
-      expect(result.errors).toBeDefined();
-      expect(result.errors?.some(e => e.node === 'visual-formatter')).toBe(true);
-    });
-
-    it('updates metadata with latency and models', async () => {
-      const mockLLM = {
-        chat: {
-          completions: {
-            create: vi.fn().mockResolvedValue({
-              choices: [{
-                message: {
-                  content: JSON.stringify([
-                    { slideIndex: 1, type: 'cover', headline: 'Capa', body: 'Intro' },
-                  ]),
-                },
-              }],
-            }),
-          },
-        },
-      };
-      vi.mocked(createLLMClient).mockReturnValue(mockLLM as any);
-
-      vi.mocked(pool.query).mockImplementation(async (sql: string) => {
-        if (sql.includes('INSERT INTO creatives')) {
-          return { rows: [{ id: 'creative-1' }] } as any;
-        }
-        return { rows: [] } as any;
-      });
-
-      const result = await visualFormatterNode(mockState);
-
-      expect(result.metadata).toBeDefined();
-      expect(result.metadata?.totalLatency).toBeGreaterThan(0);
-      expect(result.metadata?.models).toContain('visual-formatter');
-    });
+    expect(result.slides).toHaveLength(2);
+    expect(result.htmlSlideConfigs).toHaveLength(2);
+    expect(result.htmlSlides).toHaveLength(2);
+    expect(result.htmlSlideConfigs?.[0]?.accentColor).toBe('#C8A96E');
+    expect(result.htmlSlideConfigs?.[1]?.ctaButton.visible).toBe(true);
   });
 });

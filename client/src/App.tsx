@@ -56,6 +56,7 @@ function Router() {
       <Route path="/chat">{() => <ProtectedRoute component={ChatPage} />}</Route>
       <Route path="/clients">{() => <ProtectedRoute component={ClientsPage} />}</Route>
       <Route path="/clients/:clientId">{() => <ProtectedRoute component={ClientWorkspacePage} />}</Route>
+      <Route path="/clients/:clientId/calendar">{() => <ProtectedRoute component={ClientWorkspacePage} />}</Route>
       <Route path="/library">{() => <ProtectedRoute component={LibraryPage} />}</Route>
       <Route path="/analytics">{() => <ProtectedRoute component={AnalyticsPage} />}</Route>
       <Route path="/agents">{() => <ProtectedRoute component={AgentsPage} />}</Route>
